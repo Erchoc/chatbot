@@ -1,0 +1,27 @@
+{
+  "name": "chatbot",
+  "private": true,
+  "version": "0.0.1",
+  "scripts": {
+    "dev": "concurrently -n server,web -c cyan,yellow \"pnpm dev:server\" \"pnpm dev:web\"",
+    "dev:server": "pnpm --filter @chatbot/server dev",
+    "dev:web": "pnpm --filter @chatbot/web dev",
+    "build": "pnpm --filter @chatbot/web build && pnpm --filter @chatbot/server build",
+    "start": "pnpm --filter @chatbot/server start",
+    "ship": "fly deploy",
+    "test": "pnpm -r test",
+    "test:unit": "pnpm -r test:unit",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "typecheck": "pnpm -r typecheck",
+    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "concurrently": "^9.1.0",
+    "lefthook": "^1.11.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["@biomejs/biome", "esbuild", "lefthook"]
+  }
+}
