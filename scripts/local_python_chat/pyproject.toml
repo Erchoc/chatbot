@@ -1,0 +1,21 @@
+[project]
+name = "local-python-chat"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = [
+    "faster-whisper",
+    "pyaudio",
+    "numpy",
+    "sounddevice",
+    "zhconv",
+    "openai",
+    "kokoro",
+    "misaki[zh]",
+    "python-dotenv",
+    "jieba",
+    "httpx[socks]",
+]
+
+[tool.uv]
+# 国内镜像源，绕过代理
+index-url = "https://pypi.tuna.tsinghua.edu.cn/simple"

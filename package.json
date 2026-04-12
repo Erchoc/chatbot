@@ -14,7 +14,8 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "typecheck": "pnpm -r typecheck",
-    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "local_chat": "bash scripts/local_python_chat/setup.sh -y"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
