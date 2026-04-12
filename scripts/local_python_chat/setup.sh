@@ -28,14 +28,11 @@ no_proxy() {
       "$@"
 }
 
-# ── 检查/安装 uv ───────────────────────────────────────────
+# ── 检查 uv ───────────────────────────────────────────────
 if ! command -v uv &>/dev/null; then
-  info "未检测到 uv，正在安装..."
-  no_proxy pip install uv --quiet
-  ok "uv 安装完成"
-else
-  info "uv 已安装：$(uv --version)"
+  die "未检测到 uv，请先安装：curl -LsSf https://astral.sh/uv/install.sh | sh"
 fi
+info "uv 已安装：$(uv --version)"
 
 # ── 同步依赖（uv 自动管理 .venv 和 uv.lock） ──────────────
 info "同步 Python 依赖..."
