@@ -14,7 +14,8 @@ import argparse
 import os
 import sys
 import warnings
-warnings.filterwarnings("ignore")
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -55,7 +56,9 @@ def purge_cache(repo_id: str) -> None:
 
 # ── 下载步骤 ──────────────────────────────────────────────────────────────────
 
-def step(label: str, repo_id: str, fn):
+from huggingface_hub import snapshot_download
+
+def step(label: str, repo_id: str):
     if args.force:
         purge_cache(repo_id)
     elif is_cached(repo_id):
@@ -64,23 +67,14 @@ def step(label: str, repo_id: str, fn):
 
     print(f"⬇️  {label}...", flush=True)
     try:
-        fn()
+        snapshot_download(repo_id)
         print(f"✅ {label} 完成\n")
     except Exception as e:
         print(f"\n❌ {label} 下载失败：{e}", file=sys.stderr)
         print(f"   请检查网络，或在 .env 中设置 HF_ENDPOINT 切换下载源", file=sys.stderr)
         sys.exit(1)
 
-step(
-    "Whisper small（语音识别，~244MB）",
-    "Systran/faster-whisper-small",
-    lambda: __import__("faster_whisper").WhisperModel("small", compute_type="float32"),
-)
-
-step(
-    "Kokoro-82M（语音合成，~330MB）",
-    "hexgrad/Kokoro-82M-v1.1-zh",
-    lambda: __import__("kokoro").KPipeline(lang_code="z", repo_id="hexgrad/Kokoro-82M-v1.1-zh"),
-)
+step("Whisper small（语音识别，~244MB）", "Systran/faster-whisper-small")
+step("Kokoro-82M（语音合成，~330MB）",   "hexgrad/Kokoro-82M-v1.1-zh")
 
 print("所有模型已就绪，可以运行 chat.py 了。")
