@@ -34,6 +34,16 @@ if ! command -v uv &>/dev/null; then
 fi
 info "uv 已安装：$(uv --version)"
 
+# ── 检查系统依赖（pyaudio 编译需要 portaudio） ────────────
+if ! [ -f /usr/include/portaudio.h ] && ! [ -f /usr/local/include/portaudio.h ]; then
+  if command -v apt-get &>/dev/null; then
+    info "安装系统依赖 portaudio19-dev..."
+    sudo apt-get install -y portaudio19-dev
+  else
+    die "缺少 portaudio 开发库\n   macOS: brew install portaudio\n   Debian/Ubuntu: sudo apt-get install portaudio19-dev"
+  fi
+fi
+
 # ── 同步依赖（uv 自动管理 .venv 和 uv.lock） ──────────────
 info "同步 Python 依赖..."
 cd "$SCRIPT_DIR"
