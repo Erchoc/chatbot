@@ -435,6 +435,7 @@ def main():
     except KeyboardInterrupt:
         sd.stop()
         print("\n\n👋 下次再聊！")
+        sys.exit(0)
 
 if __name__ == "__main__":
     main()
