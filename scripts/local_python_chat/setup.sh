@@ -35,7 +35,13 @@ fi
 info "uv 已安装：$(uv --version)"
 
 # ── 检查系统依赖（pyaudio 编译需要 portaudio） ────────────
-if ! pkg-config --exists portaudio-2.0 2>/dev/null; then
+_portaudio_installed() {
+  command -v brew    &>/dev/null && brew list portaudio &>/dev/null && return 0
+  command -v dpkg    &>/dev/null && dpkg -s portaudio19-dev &>/dev/null && return 0
+  pkg-config --exists portaudio-2.0 2>/dev/null && return 0
+  return 1
+}
+if ! _portaudio_installed; then
   if command -v brew &>/dev/null; then
     info "安装系统依赖 portaudio..."
     brew install portaudio
