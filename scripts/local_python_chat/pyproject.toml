@@ -9,10 +9,8 @@ dependencies = [
     "sounddevice",
     "zhconv",
     "openai",
-    "kokoro",
-    "misaki[zh]",
+    "edge-tts",
     "python-dotenv",
-    "jieba",
     "httpx[socks]",
 ]
 

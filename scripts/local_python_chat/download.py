@@ -74,7 +74,9 @@ def step(label: str, repo_id: str):
         print(f"   请检查网络，或在 .env 中设置 HF_ENDPOINT 切换下载源", file=sys.stderr)
         sys.exit(1)
 
-step("Whisper small（语音识别，~244MB）", "Systran/faster-whisper-small")
-step("Kokoro-82M（语音合成，~330MB）",   "hexgrad/Kokoro-82M-v1.1-zh")
+step("Whisper tiny（语音识别，~39MB）", "Systran/faster-whisper-tiny")
+# step("Whisper base（语音识别，~74MB）", "Systran/faster-whisper-base")
+# step("Whisper small（语音识别，~244MB）", "Systran/faster-whisper-small")
+# step("Kokoro-82M（语音合成，~330MB）",   "hexgrad/Kokoro-82M-v1.1-zh")
 
 print("所有模型已就绪，可以运行 chat.py 了。")

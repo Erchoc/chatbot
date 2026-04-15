@@ -1,6 +1,6 @@
 """
 语音对话机器人
-麦克风 → Whisper(STT) → LLM(流式) → Kokoro(TTS) → 扬声器
+麦克风 → Whisper(STT) → LLM(流式) → edge-tts(TTS) → 扬声器
 
 流水线：LLM 每完成一句就立即合成并播放，无需等全部生成完。
 """
@@ -10,6 +10,10 @@ import time
 import argparse
 import re
 import queue
+import io
+import wave
+import asyncio
+import subprocess
 
 _BOOT_TIME = time.time()
 print(f"[{time.strftime('%H:%M:%S')}] Python 启动，开始加载依赖...", flush=True)
@@ -19,13 +23,6 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-# HuggingFace 下载源：默认国内镜像，.env 里设置 HF_ENDPOINT 可覆盖
-os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-
-import jieba
-jieba.setLogLevel(jieba.logging.CRITICAL)
-jieba.initialize()
-
 import pyaudio
 import numpy as np
 import sounddevice as sd
@@ -34,7 +31,7 @@ from dataclasses import dataclass
 from faster_whisper import WhisperModel
 from zhconv import convert
 from openai import OpenAI
-from kokoro import KPipeline
+import edge_tts
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -64,7 +61,7 @@ AI_API_KEY  = os.environ["AI_API_KEY"]
 AI_BASE_URL = os.environ["AI_BASE_URL"]
 AI_MODEL    = os.environ["AI_MODEL"]
 
-WHISPER_MODEL        = "small"
+WHISPER_MODEL        = "tiny"
 SILENCE_SECONDS      = 0.8
 MIN_SPEECH_SECONDS   = 0.6
 MIN_LOUD_CHUNKS      = 8
@@ -73,8 +70,13 @@ INTERRUPT_LOUD_COUNT = 3
 RATE                 = 16000
 CHUNK                = 1024
 TTS_SPEED            = 1.3
-TTS_VOICE            = "zf_001"
+TTS_VOICE            = "zh-CN-XiaoxiaoNeural"
 TTS_SAMPLE_RATE      = 24000
+
+def _tts_rate() -> str:
+    """将 TTS_SPEED 映射为 edge-tts 的 rate 参数（如 +30%）"""
+    pct = int((TTS_SPEED - 1.0) * 100)
+    return f"+{pct}%" if pct >= 0 else f"{pct}%"
 
 _SENT_END = re.compile(r"[。！？\n]")
 _DONE     = object()  # producer/consumer 队列终止哨兵
@@ -143,19 +145,41 @@ def init():
     stt = WhisperModel(WHISPER_MODEL, compute_type="float32", local_files_only=True)
     print(" ✅")
 
-    print("   加载 Kokoro TTS...", end="", flush=True)
-    tts = KPipeline(lang_code="z", repo_id="hexgrad/Kokoro-82M-v1.1-zh")
-    print(" ✅")
-
-    print("   加载中文分词...", end="", flush=True)
-    convert("测试", "zh-cn")
-    print(" ✅")
-
     print("   连接 LLM...", end="", flush=True)
     llm = OpenAI(api_key=AI_API_KEY, base_url=AI_BASE_URL)
     print(" ✅")
 
-    return stt, tts, llm
+    return stt, llm
+
+# ============ edge-tts 音频合成 ============
+async def _edge_tts_async(text: str) -> bytes:
+    communicate = edge_tts.Communicate(text, voice=TTS_VOICE, rate=_tts_rate())
+    chunks = []
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            chunks.append(chunk["data"])
+    return b"".join(chunks)
+
+def edge_tts_to_audio(text: str) -> np.ndarray | None:
+    """将文本转为 24kHz mono float32 numpy 数组"""
+    try:
+        mp3_data = asyncio.run(_edge_tts_async(text))
+        if not mp3_data:
+            return None
+        # ffmpeg: mp3 -> wav 24kHz mono s16
+        proc = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error",
+             "-i", "pipe:0", "-ar", str(TTS_SAMPLE_RATE), "-ac", "1",
+             "-f", "wav", "pipe:1"],
+            input=mp3_data, capture_output=True
+        )
+        wav_bytes = proc.stdout
+        with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+            frames = wf.readframes(wf.getnframes())
+            audio = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+        return audio
+    except Exception:
+        return None
 
 # ============ 噪音校准 ============
 def calibrate_noise(device: int | None) -> int:
@@ -273,7 +297,8 @@ def speech_to_text(stt, audio: np.ndarray) -> tuple[str, float]:
     segments, _ = stt.transcribe(
         audio, language="zh",
         initial_prompt="以下是普通话的句子。",
-        beam_size=3,
+        beam_size=1,
+        best_of=1,
         vad_filter=True,
         vad_parameters=dict(min_silence_duration_ms=300, speech_pad_ms=200),
         condition_on_previous_text=False,
@@ -297,7 +322,7 @@ def speech_to_text(stt, audio: np.ndarray) -> tuple[str, float]:
 # ============ LLM 流式 + TTS 流水线 ============
 def chat_and_speak(
     llm, history: list, user_text: str,
-    tts_engine, threshold: int, device: int | None,
+    threshold: int, device: int | None,
 ) -> tuple[float, float, int, float]:
     """返回 (llm_ttft_ms, pipeline_total_ms, token数, tts_synth_ms)"""
     global is_speaking, stop_speaking
@@ -318,10 +343,11 @@ def chat_and_speak(
 
     def _synth_and_enqueue(text: str) -> None:
         t = time.time()
-        pieces = [a for _, _, a in tts_engine(text, voice=TTS_VOICE, speed=TTS_SPEED)]
+        audio = edge_tts_to_audio(text)
         state["tts_ms"] += (time.time() - t) * 1000
-        if pieces and not stop_speaking:
-            audio_q.put(np.concatenate(pieces))
+        print(f"\n   [DEBUG] TTS 合成完成，audio 长度: {len(audio) if audio is not None else 0}", flush=True)
+        if audio is not None and not stop_speaking:
+            audio_q.put(audio)
 
     def producer() -> None:
         pending = ""
@@ -363,8 +389,13 @@ def chat_and_speak(
             if item is _DONE:
                 break
             if not stop_speaking:
-                sd.play(item, TTS_SAMPLE_RATE)
-                sd.wait()
+                try:
+                    print(f"   [DEBUG] 开始播放音频...", flush=True)
+                    sd.play(item, TTS_SAMPLE_RATE)
+                    sd.wait()
+                    print(f"   [DEBUG] 音频播放完成", flush=True)
+                except Exception as e:
+                    print(f"\n   [DEBUG] 播放异常: {e}", flush=True)
 
     prod_t = threading.Thread(target=producer, daemon=True)
     cons_t = threading.Thread(target=consumer, daemon=True)
@@ -395,7 +426,7 @@ def main():
         list_audio_devices()
         return
 
-    stt, tts_engine, llm = init()
+    stt, llm = init()
     threshold = calibrate_noise(args.device)
 
     history = [
@@ -427,7 +458,7 @@ def main():
             print(f"\n   🗣️ 你: {text}")
 
             metrics.llm_ttft_ms, metrics.llm_total_ms, metrics.llm_tokens, metrics.tts_synth_ms = \
-                chat_and_speak(llm, history, text, tts_engine, threshold, args.device)
+                chat_and_speak(llm, history, text, threshold, args.device)
 
             if not stop_speaking:
                 metrics.log()
