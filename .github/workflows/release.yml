@@ -57,6 +57,58 @@ jobs:
           strip cb-macos-universal
           file cb-macos-universal
 
+      - name: Codesign & Notarize
+        if: ${{ env.APPLE_CERTIFICATE != '' }}
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+        run: |
+          # ── Import certificate into temporary keychain ──
+          KEYCHAIN="build.keychain"
+          KEYCHAIN_PW="actions"
+          security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > cert.p12
+          security import cert.p12 -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PW" "$KEYCHAIN"
+          rm cert.p12
+
+          # ── Sign with entitlements ──
+          codesign --force --options runtime \
+            --entitlements packages/cli/entitlements.plist \
+            --sign "Developer ID Application: ${APPLE_TEAM_ID}" \
+            --timestamp \
+            cb-macos-universal
+
+          codesign --verify --verbose cb-macos-universal
+
+          # ── Notarize ──
+          zip cb-notarize.zip cb-macos-universal
+          xcrun notarytool submit cb-notarize.zip \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait --timeout 600
+          rm cb-notarize.zip
+
+          echo "✓ Signed and notarized"
+
+      - name: Ad-hoc sign (no Apple credentials)
+        if: ${{ env.APPLE_CERTIFICATE == '' }}
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+        run: |
+          codesign --force --options runtime \
+            --entitlements packages/cli/entitlements.plist \
+            --sign - \
+            cb-macos-universal
+          echo "⚠ Ad-hoc signed only (no Apple Developer credentials configured)"
+
       - uses: actions/upload-artifact@v6
         with:
           name: cb-macos-universal

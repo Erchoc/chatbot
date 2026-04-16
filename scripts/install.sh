@@ -59,6 +59,12 @@ fi
 mkdir -p "$INSTALL_DIR"
 chmod +x "$TMP"
 
+# On macOS, reset microphone TCC entry so the new binary gets a fresh prompt
+if [ "$OS" = "Darwin" ]; then
+  # Ad-hoc sign if not already properly signed (ensures entitlements persist)
+  codesign --verify "$TMP" 2>/dev/null || codesign --force --sign - "$TMP" 2>/dev/null || true
+fi
+
 # Remove stale copies from other locations
 rm -f "/usr/local/bin/$BIN_NAME" 2>/dev/null || true
 rm -f "$HOME/.cargo/bin/$BIN_NAME" 2>/dev/null || true

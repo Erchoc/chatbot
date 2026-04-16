@@ -11,6 +11,16 @@ cargo build --manifest-path packages/cli/Cargo.toml --release
 mkdir -p "$INSTALL_DIR"
 cp "packages/cli/target/release/$BINARY" "$INSTALL_DIR/$BINARY"
 
+# macOS: sign with microphone entitlement to avoid repeated TCC prompts
+if [ "$(uname -s)" = "Darwin" ]; then
+  ENTITLEMENTS="packages/cli/entitlements.plist"
+  if [ -f "$ENTITLEMENTS" ]; then
+    codesign --force --options runtime \
+      --entitlements "$ENTITLEMENTS" \
+      --sign - "$INSTALL_DIR/$BINARY" 2>/dev/null || true
+  fi
+fi
+
 printf "\033[92m✓\033[0m Installed \033[1mcb\033[0m to %s/%s\n" "$INSTALL_DIR" "$BINARY"
 
 # Remove stale binaries that would shadow the newly installed one
