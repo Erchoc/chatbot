@@ -67,6 +67,78 @@ fn get_cb_binary_path() -> Result<PathBuf> {
     Ok(exe)
 }
 
+// === macOS: codesign ===
+
+/// Ensure the binary has an ad-hoc signature with microphone entitlement.
+/// If already properly signed (e.g. by CI with Developer ID), this is a no-op.
+fn ensure_codesign(cb_bin: &PathBuf) {
+    // Check if already signed with a valid identity (not ad-hoc)
+    let verify = Command::new("codesign")
+        .args(["--verify", "--verbose"])
+        .arg(cb_bin)
+        .output();
+
+    if let Ok(out) = &verify {
+        if out.status.success() {
+            // Already properly signed — check if it has the audio entitlement
+            let ent_check = Command::new("codesign")
+                .args(["--display", "--entitlements", ":-"])
+                .arg(cb_bin)
+                .output();
+            if let Ok(ent_out) = ent_check {
+                let ent_str = String::from_utf8_lossy(&ent_out.stdout);
+                if ent_str.contains("com.apple.security.device.audio-input") {
+                    return; // Fully signed with correct entitlements
+                }
+            }
+        }
+    }
+
+    // Write temporary entitlements file
+    let entitlements = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+</dict>
+</plist>"#;
+
+    let tmp_dir = std::env::temp_dir();
+    let ent_path = tmp_dir.join("cb-entitlements.plist");
+    if std::fs::write(&ent_path, entitlements).is_err() {
+        println!("  Warning: could not write entitlements file, skipping codesign");
+        return;
+    }
+
+    println!("  Signing binary with microphone entitlement...");
+    let result = Command::new("codesign")
+        .args([
+            "--force",
+            "--options", "runtime",
+            "--entitlements",
+        ])
+        .arg(&ent_path)
+        .args(["--sign", "-"])
+        .arg(cb_bin)
+        .output();
+
+    let _ = std::fs::remove_file(&ent_path);
+
+    match result {
+        Ok(out) if out.status.success() => {
+            println!("  Signed ✓");
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            println!("  Warning: codesign failed: {stderr}");
+        }
+        Err(e) => {
+            println!("  Warning: codesign not available: {e}");
+        }
+    }
+}
+
 // === macOS: launchd ===
 
 fn launchd_plist_path() -> PathBuf {
@@ -83,6 +155,10 @@ fn launchd_log_dir() -> PathBuf {
 }
 
 fn install_launchd(cb_bin: &PathBuf) -> Result<()> {
+    // Ad-hoc sign with microphone entitlement if not already properly signed.
+    // Without this, macOS TCC will repeatedly prompt for microphone access.
+    ensure_codesign(cb_bin);
+
     let plist_path = launchd_plist_path();
     let log_dir = launchd_log_dir();
 
