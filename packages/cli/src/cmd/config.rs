@@ -214,8 +214,12 @@ pub fn set(key: &str, value: &str) -> Result<()> {
 
     match key {
         "persona.name" => {
+            // Only auto-update wake word if it still matches the default pattern
+            let old_default = format!("嘿{}", cfg.persona.name);
             cfg.persona.name = value.to_string();
-            cfg.persona.wake_word.word = format!("嘿{value}");
+            if cfg.persona.wake_word.word == old_default {
+                cfg.persona.wake_word.word = format!("嘿{value}");
+            }
         }
         "persona.language" | "locale" => {
             if value != "en" && value != "zh" {
@@ -227,7 +231,10 @@ pub fn set(key: &str, value: &str) -> Result<()> {
             cfg.persona.wake_word.enabled = matches!(value, "true" | "1" | "yes" | "on");
         }
         "persona.wake_word.word" | "wake_word.word" => {
-            anyhow::bail!("唤醒词根据助手名称自动生成，请修改 persona.name");
+            if value.trim().is_empty() {
+                anyhow::bail!("唤醒词不能为空");
+            }
+            cfg.persona.wake_word.word = value.to_string();
         }
         "speech.doubao.app_id" => cfg.speech.doubao.app_id = value.to_string(),
         "speech.doubao.access_token" => cfg.speech.doubao.access_token = value.to_string(),
@@ -299,10 +306,14 @@ fn wizard_persona(cfg: &mut AppConfig) -> Result<()> {
     }
     println!();
 
-    // Wake word — auto-derived from assistant name
-    cfg.persona.wake_word.word = format!("嘿{}", cfg.persona.name);
-
-    println!("   {MUTED}唤醒词: 「{}」（基于助手名称自动生成）{RESET}", cfg.persona.wake_word.word);
+    // Wake word — default is "嘿{name}", but user can customize
+    let default_wake = format!("嘿{}", cfg.persona.name);
+    if cfg.persona.wake_word.word.is_empty() || cfg.persona.wake_word.word == default_wake {
+        cfg.persona.wake_word.word = default_wake;
+    }
+    if let Some(v) = prompt_optional("   唤醒词", &cfg.persona.wake_word.word)? {
+        cfg.persona.wake_word.word = v;
+    }
     println!();
     let ww_opts = vec![
         SelectOption::new("关闭", "随时说话都会响应").with_badge(
