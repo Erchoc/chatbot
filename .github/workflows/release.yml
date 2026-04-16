@@ -3,9 +3,23 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build and validate artifacts only (skip GitHub Release publish)'
+        required: true
+        type: boolean
+        default: true
+      tag_name:
+        description: 'Tag name to use when publishing from manual trigger (optional)'
+        required: false
+        type: string
 
 permissions:
   contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   # ── macOS Universal Binary (arm64 + x86_64 → single fat binary) ───────────
@@ -13,13 +27,13 @@ jobs:
     name: Build macOS Universal
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -53,13 +67,13 @@ jobs:
     name: Build Linux x86_64
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-gnu
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -89,13 +103,13 @@ jobs:
     name: Build Linux aarch64
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-unknown-linux-gnu
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -120,13 +134,13 @@ jobs:
           name: cb-linux-arm64
           path: cb-linux-arm64
 
-  # ── Create GitHub Release ─────────────────────────────────────────────────
+  # ── Package + (optionally) Create GitHub Release ──────────────────────────
   release:
-    name: Create GitHub Release
+    name: Package / Release
     needs: [build-macos, build-linux-x86, build-linux-arm]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/download-artifact@v4
         with:
@@ -140,9 +154,38 @@ jobs:
             sha256sum "$file/$file" > "$file/$file.sha256"
           done
 
+      - name: Resolve release tag
+        id: meta
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            tag="${GITHUB_REF_NAME}"
+          elif [[ -n "${{ inputs.tag_name }}" ]]; then
+            tag="${{ inputs.tag_name }}"
+          else
+            tag="manual-${GITHUB_RUN_NUMBER}"
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "resolved tag: ${tag}"
+
+      - name: Dry-run summary
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          echo "Dry run complete. Built artifacts:"
+          find artifacts -maxdepth 2 -type f -print | sort
+
+      - name: Upload dry-run bundle
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-dry-run-${{ steps.meta.outputs.tag }}
+          path: artifacts
+
       - name: Create release
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run) }}
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.tag }}
           generate_release_notes: true
           files: |
             artifacts/cb-macos-universal/cb-macos-universal
