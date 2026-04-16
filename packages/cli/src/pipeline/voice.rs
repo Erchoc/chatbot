@@ -1,7 +1,7 @@
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use reqwest::Client;
@@ -15,6 +15,7 @@ use crate::config::AppConfig;
 use crate::history::Conversation;
 use crate::i18n::{self, Messages};
 use crate::llm::OpenAiClient;
+use crate::log::EventLogger;
 use crate::speech::doubao::{DoubaoAsr, DoubaoTts};
 use crate::speech::{Asr, Tts};
 use crate::ui::{art::Face, banner, spinner::Spinner, theme::*};
@@ -57,6 +58,40 @@ fn is_sentence_end(c: char) -> bool {
     matches!(c, '。' | '！' | '？' | '，' | ',' | '.' | '!' | '?' | '\n')
 }
 
+/// How long the assistant stays "awake" after the last interaction.
+const WAKE_DURATION: Duration = Duration::from_secs(5 * 60);
+
+/// Wake-word session state.
+enum WakeState {
+    /// Waiting for wake word.
+    Sleeping,
+    /// Active – expires_at is when it auto-sleeps without new interaction.
+    Awake { expires_at: Instant },
+}
+
+impl WakeState {
+    fn is_awake(&self) -> bool {
+        match self {
+            Self::Awake { expires_at } => Instant::now() < *expires_at,
+            Self::Sleeping => false,
+        }
+    }
+
+    fn wake(&mut self) {
+        *self = Self::Awake { expires_at: Instant::now() + WAKE_DURATION };
+    }
+
+    fn renew(&mut self) {
+        if let Self::Awake { expires_at } = self {
+            *expires_at = Instant::now() + WAKE_DURATION;
+        }
+    }
+
+    fn sleep(&mut self) {
+        *self = Self::Sleeping;
+    }
+}
+
 pub struct VoicePipeline {
     cfg: AppConfig,
     client: Client,
@@ -64,6 +99,9 @@ pub struct VoicePipeline {
     llm: OpenAiClient,
     history: Vec<Value>,
     conversation: Conversation,
+    logger: EventLogger,
+    turn_count: usize,
+    wake_state: WakeState,
     msg: &'static Messages,
     #[allow(dead_code)]
     debug: bool,
@@ -78,13 +116,32 @@ impl VoicePipeline {
             .build()?;
 
         let asr: Box<dyn Asr> = Box::new(DoubaoAsr::new(cfg.speech.doubao.clone(), debug));
-        let llm = OpenAiClient::new(client.clone(), cfg.llm.clone());
-        let msg = i18n::get(&cfg.locale);
+        let llm_config = cfg
+            .active_llm_config()
+            .ok_or_else(|| anyhow::anyhow!("No active LLM profile. Run `cb config`"))?;
+        let llm = OpenAiClient::new(client.clone(), llm_config);
+        let msg = i18n::get(&cfg.persona.language);
 
+        let system_prompt = i18n::build_system_prompt(
+            &cfg.persona.language,
+            &cfg.persona.name,
+            cfg.persona.wake_word.enabled,
+            &cfg.persona.wake_word.word,
+        );
         let history = vec![json!({
             "role": "system",
-            "content": msg.system_prompt
+            "content": system_prompt
         })];
+
+        // Session ID = timestamp prefix for log grouping
+        let session_id = format!(
+            "s{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        );
+        let logger = EventLogger::new(session_id);
 
         Ok(Self {
             cfg,
@@ -93,6 +150,9 @@ impl VoicePipeline {
             llm,
             history,
             conversation: Conversation::new(),
+            logger,
+            turn_count: 0,
+            wake_state: WakeState::Sleeping,
             msg,
             debug,
         })
@@ -106,15 +166,28 @@ impl VoicePipeline {
         println!("{}", Face::idle());
 
         // Init spinners for loading
+        let llm_model = self
+            .cfg
+            .active_llm_profile()
+            .map(|p| p.model.as_str())
+            .unwrap_or("unknown")
+            .to_string();
         let sp = Spinner::start_inline(
-            &format!("{} ({})...", m.llm_connecting, self.cfg.llm.model),
+            &format!("{} ({})...", m.llm_connecting, llm_model),
             BR_BLUE,
         );
+        // Log session start
+        self.logger.session_start(
+            &llm_model,
+            &self.cfg.speech.doubao.voice_type,
+            &self.cfg.persona.language,
+        );
+
         // Simulate connection check
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         sp.stop_with(&format!(
             "   {BR_GREEN}✓{RESET} {BOLD}{}{RESET} ({}) {BR_GREEN}OK{RESET}",
-            m.llm_connecting, self.cfg.llm.model
+            m.llm_connecting, llm_model
         ));
 
         let sp = Spinner::start_inline(
@@ -144,6 +217,7 @@ impl VoicePipeline {
                         sp.stop();
                         print!("{}", Face::error());
                         eprintln!("   {ERROR_COLOR}{}: {e}{RESET}", m.mic_init_failed);
+                        self.logger.error("audio", &format!("mic calibration failed: {e}"));
                         if backoff_secs >= 60 {
                             eprintln!("   {MUTED}{}{RESET}", m.mic_polling);
                         } else {
@@ -222,6 +296,7 @@ impl VoicePipeline {
                         (mic_backoff_secs * 2).min(60)
                     };
                     eprintln!("   {ERROR_COLOR}{}: {e}{RESET}", m.recording_failed);
+                    self.logger.error("audio", &format!("record failed: {e}"));
                     if mic_backoff_secs >= 60 {
                         eprintln!("   {MUTED}{}{RESET}", m.mic_polling);
                     } else {
@@ -238,6 +313,8 @@ impl VoicePipeline {
                 Some(ref a) if !a.is_empty() => {
                     let mono16k = downsample_to_mono_16k(a, dev_info);
                     if mono16k.len() < min_samples {
+                        println!("   {MUTED}音频太短，已跳过{RESET}");
+                        self.logger.skip("too_short", None);
                         continue;
                     }
                     a.clone()
@@ -246,6 +323,8 @@ impl VoicePipeline {
                 None => {
                     print!("{}", Face::error());
                     eprintln!("   {ERROR_COLOR}{}{RESET}", m.mic_disconnected);
+                    self.logger.error("audio", "mic disconnected");
+                    self.logger.session_end(self.turn_count);
                     std::process::exit(1);
                 }
             };
@@ -262,28 +341,65 @@ impl VoicePipeline {
                 Err(e) => {
                     think_spinner.stop();
                     eprintln!("   {ERROR_COLOR}{}: {e}{RESET}", m.stt_failed);
+                    eprintln!("   {MUTED}提示: 检查 Doubao 凭证是否正确 (cb config show){RESET}");
+                    self.logger.error("asr", &e.to_string());
                     continue;
                 }
             };
+
+            // Show ASR result for transparency
+            if !text.is_empty() {
+                println!("   {MUTED}ASR: {text}{RESET}");
+            }
+
             if text.is_empty() || text.len() < 2 {
+                println!("   {MUTED}未识别到文字，已跳过{RESET}");
+                self.logger.skip("empty_asr", None);
                 continue;
             }
 
-            // Wake word check
-            let text = if self.cfg.wake_word.enabled {
-                let wake_word = match self.cfg.locale.as_str() {
-                    "zh" => &self.cfg.wake_word.word_zh,
-                    _ => &self.cfg.wake_word.word_en,
-                };
-                match strip_wake_word(&text, wake_word) {
-                    Some(rest) => rest,
-                    None => continue,
+            // Wake word / session state check
+            let text = if self.cfg.persona.wake_word.enabled {
+                let wake_word = &self.cfg.persona.wake_word.word;
+
+                if self.wake_state.is_awake() {
+                    // Already awake — check for deactivation phrases first
+                    if is_deactivation(&text) {
+                        self.wake_state.sleep();
+                        println!("   {MUTED}已退出对话模式，需要「{wake_word}」重新唤醒{RESET}");
+                        self.logger.skip("user_deactivated", Some(&text));
+                        continue;
+                    }
+                    // Renew the session timer and proceed
+                    self.wake_state.renew();
+                    text
+                } else {
+                    // Sleeping — look for wake word
+                    match strip_wake_word(&text, wake_word) {
+                        Some(rest) => {
+                            self.wake_state.wake();
+                            println!("   {BR_CYAN}✦ 已唤醒，5 分钟内持续对话{RESET}");
+                            if rest.len() < 2 {
+                                // Wake word only, no command yet — wait for next turn
+                                continue;
+                            }
+                            rest
+                        }
+                        None => {
+                            println!(
+                                "   {MUTED}等待唤醒词「{wake_word}」，已跳过{RESET}"
+                            );
+                            self.logger.skip("wake_word", Some(&text));
+                            continue;
+                        }
+                    }
                 }
             } else {
                 text
             };
 
             if text.is_empty() || text.len() < 2 {
+                self.logger.skip("after_wake_word", None);
                 continue;
             }
 
@@ -295,13 +411,30 @@ impl VoicePipeline {
                 Err(e) => {
                     print!("{}", Face::error());
                     eprintln!("   {ERROR_COLOR}{}: {e}{RESET}", self.msg.chat_failed);
+                    self.logger.error("llm", &e.to_string());
                     continue;
                 }
             };
             metrics.stt_ms = stt_ms;
             metrics.log();
+
+            // Log the completed turn
+            self.turn_count += 1;
+            let reply = self.history.last()
+                .and_then(|v| v["content"].as_str())
+                .unwrap_or("")
+                .to_string();
+            self.logger.turn(
+                &text,
+                &reply,
+                metrics.stt_ms,
+                metrics.llm_ttft_ms,
+                metrics.llm_total_ms,
+                metrics.tts_synth_ms,
+            );
         }
 
+        self.logger.session_end(self.turn_count);
         Ok(())
     }
 
@@ -394,41 +527,89 @@ impl VoicePipeline {
     }
 }
 
-/// Check if the recognized text starts with the wake word (case-insensitive, punctuation-tolerant).
+/// Check if the recognized text starts with the wake word.
+///
+/// Matching is done in two passes:
+/// 1. Exact match after punctuation/space stripping (fast path).
+/// 2. Pinyin match — treats homophones as equal (e.g. "黑小派" == "嘿小派").
+///
 /// Returns the remaining text after the wake word, or None if wake word not found.
 fn strip_wake_word(text: &str, wake_word: &str) -> Option<String> {
-    let normalize = |s: &str| -> String {
+    let strip_punct = |s: &str| -> String {
         s.to_lowercase()
             .replace([',', '，', '、', '.', '!', '！', '?', '？', ' ', '\u{3000}'], "")
     };
 
-    let norm_text = normalize(text);
-    let norm_wake = normalize(wake_word);
+    let norm_text = strip_punct(text);
+    let norm_wake = strip_punct(wake_word);
 
     if norm_wake.is_empty() {
         return None;
     }
 
-    if !norm_text.starts_with(&norm_wake) {
+    // ── Pass 1: exact character match ────────────────────────────────────────
+    let char_match = norm_text.starts_with(&norm_wake);
+
+    // ── Pass 2: pinyin match (handles homophones like 嘿/黑, 哎/诶) ──────────
+    let pinyin_match = !char_match && {
+        to_pinyin_str(wake_word)
+            .zip(to_pinyin_str(text))
+            .map(|(pw, pt)| pt.starts_with(&pw))
+            .unwrap_or(false)
+    };
+
+    if !char_match && !pinyin_match {
         return None;
     }
 
-    let mut consumed = 0;
-    let mut matched = 0;
+    // Compute how many original characters to consume.
+    // We match character-by-character from `text` against `norm_wake`.
+    let wake_chars: Vec<char> = norm_wake.chars().collect();
+    let mut consumed_bytes = 0usize;
+    let mut matched_chars = 0usize;
+
     for c in text.chars() {
-        if matched >= norm_wake.len() {
+        if matched_chars >= wake_chars.len() {
             break;
         }
-        consumed += c.len_utf8();
-        let norm_c = normalize(&c.to_string());
-        matched += norm_c.len();
+        consumed_bytes += c.len_utf8();
+        // Count how many normalized chars this original char produces.
+        let norm_c = strip_punct(&c.to_string());
+        matched_chars += norm_c.chars().count();
     }
 
-    let rest = &text[consumed..];
+    let rest = &text[consumed_bytes..];
     let rest = rest.trim_start_matches(|c: char| {
         c == ',' || c == '，' || c == '、' || c == ' ' || c == '\u{3000}'
     });
-    let rest = rest.trim().to_string();
+    Some(rest.trim().to_string())
+}
 
-    Some(rest)
+/// Convert a Chinese string to a compact pinyin representation (no tones, no spaces).
+/// Returns None if the string contains no recognised characters.
+fn to_pinyin_str(s: &str) -> Option<String> {
+    use pinyin::{to_pinyin_vec, Pinyin};
+    let result: String = to_pinyin_vec(s, |p: Pinyin| p.plain())
+        .into_iter()
+        .collect();
+    if result.is_empty() { None } else { Some(result) }
+}
+
+/// Detect if the user is trying to deactivate the wake-word session.
+/// Matches common Chinese and English phrases for "go away / stop listening".
+fn is_deactivation(text: &str) -> bool {
+    let t = text
+        .to_lowercase()
+        .replace([' ', '，', ',', '。', '.', '！', '!', '？', '?'], "");
+    let phrases = [
+        // Chinese
+        "退下", "可以退下", "暂时退下", "先退下", "好了退下",
+        "暂停", "先暂停", "休息", "先休息", "暂时休息",
+        "不用了", "不需要了", "结束对话", "停止对话",
+        "拜拜", "再见", "先这样", "就这样",
+        // English
+        "goodbye", "stoplistening", "goaway", "thatsenough",
+        "dismiss", "sleep",
+    ];
+    phrases.iter().any(|p| t.contains(p))
 }

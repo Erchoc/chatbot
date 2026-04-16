@@ -1,0 +1,7 @@
+# cross-rs configuration for Linux aarch64 ALSA cross-compilation
+[target.aarch64-unknown-linux-gnu]
+pre-build = [
+    "dpkg --add-architecture arm64",
+    "apt-get update -qq",
+    "apt-get install -y libasound2-dev:arm64",
+]

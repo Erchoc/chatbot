@@ -11,41 +11,93 @@ fn config_path() -> PathBuf {
         .join("config.toml")
 }
 
+// ─── Top-level config ────────────────────────────────────────────────────────
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
-    /// Display language: "en" or "zh"
-    #[serde(default = "default_locale")]
-    pub locale: String,
     #[serde(default)]
-    pub wake_word: WakeWordConfig,
+    pub persona: PersonaConfig,
+
+    /// Name of the currently active LLM profile
     #[serde(default)]
-    pub llm: LlmConfig,
+    pub active_llm: String,
+
+    /// All configured LLM profiles (one active at a time)
+    #[serde(default)]
+    pub llm_profiles: Vec<LlmProfile>,
+
     #[serde(default)]
     pub speech: SpeechConfig,
+
     #[serde(default)]
     pub audio: AudioConfig,
+
+    // ── Legacy fields – read-only on load, never written back ────────────────
+    #[serde(default, skip_serializing)]
+    pub locale: Option<String>,
+
+    #[serde(default, skip_serializing)]
+    pub llm: Option<LegacyLlmConfig>,
+
+    #[serde(default, skip_serializing)]
+    pub wake_word: Option<LegacyWakeWordConfig>,
+}
+
+// ─── Persona ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersonaConfig {
+    /// Display name of the assistant (used in system prompt and UI)
+    #[serde(default = "default_name")]
+    pub name: String,
+
+    /// UI + system prompt language: "zh" | "en"
+    #[serde(default = "default_language")]
+    pub language: String,
+
+    #[serde(default)]
+    pub wake_word: WakeWordConfig,
+}
+
+fn default_name() -> String {
+    "Chatbox".into()
+}
+fn default_language() -> String {
+    "zh".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WakeWordConfig {
-    /// Enable wake word mode
     pub enabled: bool,
-    /// Wake word for English mode
-    pub word_en: String,
-    /// Wake word for Chinese mode
-    pub word_zh: String,
+    /// The trigger phrase, e.g. "嘿小派" or "Hey Chatbox"
+    #[serde(default = "default_wake_word")]
+    pub word: String,
 }
 
-fn default_locale() -> String {
-    "en".into()
+fn default_wake_word() -> String {
+    "嘿小派".into()
 }
 
+// ─── LLM profiles ────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmProfile {
+    /// Human-readable label, e.g. "DeepSeek", "My Claude"
+    pub name: String,
+    pub base_url: String,
+    pub model: String,
+    pub api_key: String,
+}
+
+/// Compatibility shim so OpenAiClient keeps its existing constructor signature.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
     pub api_key: String,
     pub base_url: String,
     pub model: String,
 }
+
+// ─── Speech ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpeechConfig {
@@ -67,22 +119,59 @@ pub struct DoubaoConfig {
     pub asr_url: String,
 }
 
+// ─── Audio ───────────────────────────────────────────────────────────────────
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioConfig {
     pub silence_seconds: f32,
     pub min_speech_seconds: f32,
 }
 
-// === Defaults ===
+// ─── Legacy structs (migration only) ─────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LegacyLlmConfig {
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub model: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LegacyWakeWordConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub word_en: String,
+    #[serde(default)]
+    pub word_zh: String,
+}
+
+// ─── Defaults ────────────────────────────────────────────────────────────────
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            locale: default_locale(),
-            wake_word: WakeWordConfig::default(),
-            llm: LlmConfig::default(),
+            persona: PersonaConfig::default(),
+            active_llm: String::new(),
+            llm_profiles: vec![],
             speech: SpeechConfig::default(),
             audio: AudioConfig::default(),
+            locale: None,
+            llm: None,
+            wake_word: None,
+        }
+    }
+}
+
+impl Default for PersonaConfig {
+    fn default() -> Self {
+        Self {
+            name: default_name(),
+            language: default_language(),
+            wake_word: WakeWordConfig::default(),
         }
     }
 }
@@ -91,18 +180,7 @@ impl Default for WakeWordConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            word_en: "Hi Pai".into(),
-            word_zh: "嘿小派".into(),
-        }
-    }
-}
-
-impl Default for LlmConfig {
-    fn default() -> Self {
-        Self {
-            api_key: String::new(),
-            base_url: "https://api.deepseek.com".into(),
-            model: "deepseek-chat".into(),
+            word: default_wake_word(),
         }
     }
 }
@@ -141,8 +219,10 @@ impl Default for AudioConfig {
     }
 }
 
+// ─── AppConfig methods ────────────────────────────────────────────────────────
+
 impl AppConfig {
-    /// Load config: config.toml -> env var overrides
+    /// Load config file, apply env overrides, then migrate legacy fields.
     pub fn load() -> Result<Self> {
         let path = config_path();
         let mut cfg = if path.exists() {
@@ -154,12 +234,11 @@ impl AppConfig {
             Self::default()
         };
 
-        // Env var overrides (compatible with remote_chat .env)
+        cfg.migrate_legacy();
         cfg.apply_env_overrides();
         Ok(cfg)
     }
 
-    /// Save config to file
     pub fn save(&self) -> Result<()> {
         let path = config_path();
         if let Some(parent) = path.parent() {
@@ -170,16 +249,73 @@ impl AppConfig {
         Ok(())
     }
 
+    /// Migrate old flat `[llm]` / `locale` / `[wake_word]` fields into new structure.
+    fn migrate_legacy(&mut self) {
+        // locale → persona.language
+        if let Some(locale) = self.locale.take() {
+            if !locale.is_empty() {
+                self.persona.language = locale;
+            }
+        }
+
+        // [llm] → llm_profiles[0]
+        if let Some(llm) = self.llm.take() {
+            if self.llm_profiles.is_empty() && is_real_value(&llm.api_key) {
+                let name = guess_provider_name(&llm.base_url);
+                self.llm_profiles.push(LlmProfile {
+                    name: name.clone(),
+                    base_url: llm.base_url,
+                    model: llm.model,
+                    api_key: llm.api_key,
+                });
+                if self.active_llm.is_empty() {
+                    self.active_llm = name;
+                }
+            }
+        }
+
+        // [wake_word] → persona.wake_word
+        if let Some(ww) = self.wake_word.take() {
+            self.persona.wake_word.enabled = ww.enabled;
+            if !ww.word_zh.is_empty() {
+                self.persona.wake_word.word = ww.word_zh;
+            } else if !ww.word_en.is_empty() {
+                self.persona.wake_word.word = ww.word_en;
+            }
+        }
+
+        // Ensure active_llm points to an existing profile
+        if !self.active_llm.is_empty()
+            && !self.llm_profiles.iter().any(|p| p.name == self.active_llm)
+        {
+            self.active_llm = self
+                .llm_profiles
+                .first()
+                .map(|p| p.name.clone())
+                .unwrap_or_default();
+        }
+    }
+
     fn apply_env_overrides(&mut self) {
-        if let Ok(v) = std::env::var("AI_API_KEY") {
-            self.llm.api_key = v;
+        // Env vars patch the active profile (or create one on the fly)
+        let api_key = std::env::var("AI_API_KEY").ok();
+        let base_url = std::env::var("AI_BASE_URL").ok();
+        let model = std::env::var("AI_MODEL").ok();
+
+        if api_key.is_some() || base_url.is_some() || model.is_some() {
+            if let Some(profile) = self.active_llm_profile_mut() {
+                if let Some(v) = api_key {
+                    profile.api_key = v;
+                }
+                if let Some(v) = base_url {
+                    profile.base_url = v;
+                }
+                if let Some(v) = model {
+                    profile.model = v;
+                }
+            }
         }
-        if let Ok(v) = std::env::var("AI_BASE_URL") {
-            self.llm.base_url = v;
-        }
-        if let Ok(v) = std::env::var("AI_MODEL") {
-            self.llm.model = v;
-        }
+
         if let Ok(v) = std::env::var("DOUBAO_APP_ID") {
             self.speech.doubao.app_id = v;
         }
@@ -206,31 +342,80 @@ impl AppConfig {
         }
     }
 
-    /// Check if all required fields are filled (not empty, not placeholder)
+    pub fn active_llm_profile(&self) -> Option<&LlmProfile> {
+        self.llm_profiles
+            .iter()
+            .find(|p| p.name == self.active_llm)
+            .or_else(|| self.llm_profiles.first())
+    }
+
+    fn active_llm_profile_mut(&mut self) -> Option<&mut LlmProfile> {
+        let name = self.active_llm.clone();
+        if let Some(idx) = self.llm_profiles.iter().position(|p| p.name == name) {
+            return Some(&mut self.llm_profiles[idx]);
+        }
+        self.llm_profiles.first_mut()
+    }
+
+    /// Convert active profile to the LlmConfig shape OpenAiClient expects.
+    pub fn active_llm_config(&self) -> Option<LlmConfig> {
+        self.active_llm_profile().map(|p| LlmConfig {
+            api_key: p.api_key.clone(),
+            base_url: p.base_url.clone(),
+            model: p.model.clone(),
+        })
+    }
+
     pub fn is_complete(&self) -> bool {
-        is_real_value(&self.llm.api_key)
+        let Some(profile) = self.active_llm_profile() else {
+            return false;
+        };
+        // Ollama-style local providers don't need a real key
+        let key_ok = is_real_value(&profile.api_key) || profile.api_key == "ollama";
+        key_ok
             && is_real_value(&self.speech.doubao.app_id)
             && is_real_value(&self.speech.doubao.access_token)
     }
 
-    /// Validate required config fields
     pub fn validate(&self) -> Result<()> {
-        if self.llm.api_key.is_empty() {
-            anyhow::bail!("Missing LLM API Key. Run `cb config` or set AI_API_KEY env var");
+        let profile = self
+            .active_llm_profile()
+            .ok_or_else(|| anyhow::anyhow!("No LLM profile configured. Run `cb config`"))?;
+
+        if profile.api_key.is_empty() {
+            anyhow::bail!(
+                "LLM API key not set for profile '{}'. Run `cb config`",
+                profile.name
+            );
         }
         if self.speech.doubao.app_id.is_empty() {
-            anyhow::bail!("Missing Doubao App ID. Run `cb config` or set DOUBAO_APP_ID env var");
+            anyhow::bail!("Doubao App ID not set. Run `cb config`");
         }
         if self.speech.doubao.access_token.is_empty() {
-            anyhow::bail!(
-                "Missing Doubao Access Token. Run `cb config` or set DOUBAO_ACCESS_TOKEN env var"
-            );
+            anyhow::bail!("Doubao Access Token not set. Run `cb config`");
         }
         Ok(())
     }
 }
 
-/// Check if a config value is real (not empty, not a placeholder like "your-xxx-here")
-fn is_real_value(val: &str) -> bool {
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+pub fn is_real_value(val: &str) -> bool {
     !val.is_empty() && !val.contains("your-") && !val.contains("xxx") && val != "placeholder"
+}
+
+fn guess_provider_name(base_url: &str) -> String {
+    if base_url.contains("deepseek") {
+        "DeepSeek".into()
+    } else if base_url.contains("anthropic") {
+        "Claude".into()
+    } else if base_url.contains("openai") {
+        "OpenAI".into()
+    } else if base_url.contains("groq") {
+        "Groq".into()
+    } else if base_url.contains("localhost") || base_url.contains("127.0.0.1") {
+        "Ollama".into()
+    } else {
+        "Custom".into()
+    }
 }

@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>cb dashboard</title>
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0a0a0a;--bg2:#111;--bg3:#171717;
+  --border:#262626;--border2:#333;
+  --text:#ededed;--muted:#777;--dim:#444;
+  --cyan:#00d4ff;--green:#22c55e;--yellow:#facc15;--red:#ef4444;--purple:#a855f7;
+  --radius:10px;--font:'SF Mono','Fira Code',monospace;
+}
+html,body{height:100%;overflow:hidden}
+body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:13px;display:flex;flex-direction:column}
+
+/* ── Top bar ── */
+.topbar{display:flex;align-items:center;gap:12px;padding:0 20px;height:48px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--bg2)}
+.topbar-title{color:var(--cyan);font-weight:700;font-size:14px;letter-spacing:.5px}
+.topbar-sub{color:var(--muted);font-size:11px}
+.topbar-spacer{flex:1}
+.date-select{background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 10px;border-radius:6px;font-family:var(--font);font-size:12px;cursor:pointer}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--dim);flex-shrink:0;transition:background .3s}
+.dot.live{background:var(--green);box-shadow:0 0 6px var(--green)}
+.live-label{font-size:11px;color:var(--muted)}
+
+/* ── Layout ── */
+.layout{display:flex;flex:1;overflow:hidden}
+
+/* ── Sidebar ── */
+.sidebar{width:220px;border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;background:var(--bg2);overflow-y:auto}
+.sidebar-section{padding:12px 14px 6px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--dim)}
+.session-item{padding:9px 14px;cursor:pointer;border-left:2px solid transparent;transition:all .15s}
+.session-item:hover{background:var(--bg3)}
+.session-item.active{border-left-color:var(--cyan);background:var(--bg3)}
+.session-id{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.session-stat{font-size:10px;color:var(--dim);margin-top:2px}
+.no-sessions{padding:20px 14px;color:var(--dim);font-size:12px;text-align:center;line-height:1.6}
+
+/* ── Main ── */
+.main{flex:1;overflow-y:auto;padding:20px}
+
+/* ── Stats bar ── */
+.stats{display:flex;gap:16px;margin-bottom:20px;flex-wrap:wrap}
+.stat{background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:10px 16px;min-width:100px}
+.stat-val{font-size:22px;font-weight:700;color:var(--cyan)}
+.stat-label{font-size:10px;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:.5px}
+
+/* ── Event timeline ── */
+.events{display:flex;flex-direction:column;gap:8px}
+.event{border-radius:var(--radius);border:1px solid var(--border);padding:12px 14px;transition:border-color .15s}
+.event:hover{border-color:var(--border2)}
+
+/* turn */
+.event.turn{border-left:3px solid var(--cyan)}
+.turn-time{font-size:10px;color:var(--dim);margin-bottom:6px}
+.turn-asr{color:var(--cyan);margin-bottom:4px;line-height:1.5}
+.turn-reply{color:var(--text);line-height:1.6;margin-bottom:8px}
+.turn-metrics{display:flex;gap:12px;flex-wrap:wrap}
+.metric{font-size:11px;color:var(--muted)}
+.metric span{color:var(--text)}
+
+/* skip */
+.event.skip{border-left:3px solid var(--yellow);opacity:.7}
+.skip-reason{font-size:11px;color:var(--yellow)}
+.skip-asr{font-size:11px;color:var(--muted);margin-top:2px}
+
+/* error */
+.event.error{border-left:3px solid var(--red)}
+.error-stage{font-size:11px;color:var(--red);margin-bottom:2px}
+.error-msg{font-size:12px;color:var(--muted);line-height:1.5}
+
+/* session markers */
+.event.session-start{border-left:3px solid var(--purple);background:var(--bg2)}
+.event.session-end{border-left:3px solid var(--dim)}
+.session-info{font-size:12px;color:var(--muted);line-height:1.7}
+.session-info strong{color:var(--text)}
+
+/* empty */
+.empty{text-align:center;padding:60px 20px;color:var(--dim)}
+.empty-title{font-size:16px;margin-bottom:8px;color:var(--muted)}
+.empty-sub{font-size:12px;line-height:1.7}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="dot" id="dot"></div>
+  <span class="topbar-title">cb dashboard</span>
+  <span class="topbar-sub" id="topbar-sub">日志面板</span>
+  <div class="topbar-spacer"></div>
+  <span class="live-label" id="live-label">轮询中...</span>
+  <select class="date-select" id="date-select" onchange="onDateChange()">
+    <option value="">今天</option>
+  </select>
+</div>
+
+<div class="layout">
+  <div class="sidebar" id="sidebar">
+    <div class="sidebar-section">会话</div>
+    <div id="session-list"><div class="no-sessions">暂无数据<br>运行 <code>cb</code> 开始对话</div></div>
+  </div>
+  <div class="main" id="main">
+    <div class="empty">
+      <div class="empty-title">暂无日志</div>
+      <div class="empty-sub">运行 <code>cb</code> 开始对话<br>日志会实时显示在这里</div>
+    </div>
+  </div>
+</div>
+
+<script>
+let allEvents = [];
+let sessions = [];       // [{id, startTs, model, voice, language, turns, errors, skips}]
+let activeSessionId = null;
+let selectedDate = '';
+let pollTimer = null;
+
+// ── Bootstrap ─────────────────────────────────────────────────────────────────
+
+async function init() {
+  await loadDates();
+  await poll();
+  schedulePoll();
+}
+
+async function loadDates() {
+  try {
+    const dates = await fetch('/api/events/dates').then(r => r.json());
+    const sel = document.getElementById('date-select');
+    dates.forEach(d => {
+      if (d !== todayStr()) {
+        const opt = document.createElement('option');
+        opt.value = d; opt.textContent = d;
+        sel.appendChild(opt);
+      }
+    });
+  } catch {}
+}
+
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+function onDateChange() {
+  selectedDate = document.getElementById('date-select').value;
+  activeSessionId = null;
+  clearInterval(pollTimer);
+  poll().then(schedulePoll);
+}
+
+function schedulePoll() {
+  pollTimer = setInterval(poll, selectedDate ? 10000 : 2500);
+}
+
+// ── Data fetching ─────────────────────────────────────────────────────────────
+
+async function poll() {
+  try {
+    const url = selectedDate ? `/api/events?date=${selectedDate}` : '/api/events';
+    const events = await fetch(url).then(r => r.json());
+    allEvents = events;
+    processSessions(events);
+    renderSidebar();
+    if (activeSessionId) renderMain(activeSessionId);
+    else if (sessions.length) { activeSessionId = sessions[sessions.length-1].id; renderMain(activeSessionId); }
+    updateLiveIndicator(events);
+  } catch(e) {
+    document.getElementById('live-label').textContent = '连接失败';
+  }
+}
+
+function processSessions(events) {
+  const map = new Map();
+  events.forEach(e => {
+    if (e.type === 'session_start') {
+      map.set(e.session_id, {
+        id: e.session_id,
+        startTs: e.ts,
+        model: e.model,
+        voice: e.voice,
+        language: e.language,
+        turns: 0, errors: 0, skips: 0,
+        lastTs: e.ts,
+        ended: false,
+      });
+    } else {
+      const s = map.get(e.session_id);
+      if (!s) return;
+      if (e.type === 'turn') s.turns++;
+      if (e.type === 'error') s.errors++;
+      if (e.type === 'skip') s.skips++;
+      if (e.type === 'session_end') s.ended = true;
+      s.lastTs = e.ts;
+    }
+  });
+  // Sort newest first
+  sessions = [...map.values()].sort((a,b) => b.startTs - a.startTs);
+}
+
+// ── Live indicator ────────────────────────────────────────────────────────────
+
+function updateLiveIndicator(events) {
+  const dot = document.getElementById('dot');
+  const label = document.getElementById('live-label');
+  const last = events[events.length - 1];
+  const age = last ? (Date.now() - last.ts) : Infinity;
+  const isLive = !selectedDate && age < 30000;
+  dot.className = isLive ? 'dot live' : 'dot';
+  label.textContent = isLive ? '实时' : (selectedDate || '今天');
+}
+
+// ── Sidebar ───────────────────────────────────────────────────────────────────
+
+function renderSidebar() {
+  const list = document.getElementById('session-list');
+  if (!sessions.length) {
+    list.innerHTML = '<div class="no-sessions">暂无数据<br>运行 <code>cb</code> 开始对话</div>';
+    return;
+  }
+  list.innerHTML = sessions.map(s => `
+    <div class="session-item${s.id === activeSessionId ? ' active' : ''}" onclick="selectSession('${s.id}')">
+      <div class="session-id">${fmtTime(s.startTs)} ${s.ended ? '' : '🟢'}</div>
+      <div class="session-stat">${s.model} · ${s.turns}轮${s.errors ? ` · ${s.errors}错误` : ''}</div>
+    </div>
+  `).join('');
+}
+
+function selectSession(id) {
+  activeSessionId = id;
+  renderSidebar();
+  renderMain(id);
+}
+
+// ── Main panel ────────────────────────────────────────────────────────────────
+
+function renderMain(sessionId) {
+  const sessionEvents = allEvents.filter(e => e.session_id === sessionId);
+  const session = sessions.find(s => s.id === sessionId);
+  const main = document.getElementById(  'main');
+
+  if (!sessionEvents.length) {
+    main.innerHTML = '<div class="empty"><div class="empty-title">暂无事件</div></div>';
+    return;
+  }
+
+  // Stats
+  const turns = sessionEvents.filter(e => e.type === 'turn');
+  const errors = sessionEvents.filter(e => e.type === 'error');
+  const skips = sessionEvents.filter(e => e.type === 'skip');
+  const avgStt = avg(turns.map(t => t.stt_ms));
+  const avgLlm = avg(turns.map(t => t.llm_ms));
+
+  const statsHtml = `<div class="stats">
+    <div class="stat"><div class="stat-val">${turns.length}</div><div class="stat-label">对话轮次</div></div>
+    <div class="stat"><div class="stat-val">${errors.length}</div><div class="stat-label">错误</div></div>
+    <div class="stat"><div class="stat-val">${skips.length}</div><div class="stat-label">跳过</div></div>
+    ${turns.length ? `<div class="stat"><div class="stat-val">${(avgStt/1000).toFixed(1)}s</div><div class="stat-label">平均 STT</div></div>` : ''}
+    ${turns.length ? `<div class="stat"><div class="stat-val">${(avgLlm/1000).toFixed(1)}s</div><div class="stat-label">平均 LLM</div></div>` : ''}
+  </div>`;
+
+  // Timeline
+  const eventsHtml = sessionEvents.map(e => renderEvent(e)).join('');
+
+  main.innerHTML = statsHtml + `<div class="events">${eventsHtml}</div>`;
+}
+
+function renderEvent(e) {
+  const t = fmtTime(e.ts);
+  switch (e.type) {
+    case 'session_start':
+      return `<div class="event session-start">
+        <div class="session-info">
+          <strong>● 会话开始</strong>　${t}<br>
+          模型: <strong>${e.model}</strong>　音色: <strong>${e.voice}</strong>　语言: <strong>${e.language}</strong>
+        </div>
+      </div>`;
+    case 'session_end':
+      return `<div class="event session-end">
+        <div class="session-info" style="color:var(--dim)">
+          ● 会话结束　${t}　共 ${e.turn_count} 轮对话
+        </div>
+      </div>`;
+    case 'turn':
+      return `<div class="event turn">
+        <div class="turn-time">${t}</div>
+        <div class="turn-asr">🎤 ${escHtml(e.asr)}</div>
+        <div class="turn-reply">${escHtml(e.reply)}</div>
+        <div class="turn-metrics">
+          <div class="metric">STT <span>${(e.stt_ms/1000).toFixed(2)}s</span></div>
+          <div class="metric">TTFT <span>${(e.ttft_ms/1000).toFixed(2)}s</span></div>
+          <div class="metric">LLM <span>${(e.llm_ms/1000).toFixed(2)}s</span></div>
+          <div class="metric">TTS <span>${(e.tts_ms/1000).toFixed(2)}s</span></div>
+        </div>
+      </div>`;
+    case 'skip':
+      return `<div class="event skip">
+        <div class="skip-reason">${skipLabel(e.reason)}</div>
+        ${e.asr ? `<div class="skip-asr">识别: ${escHtml(e.asr)}</div>` : ''}
+        <div style="font-size:10px;color:var(--dim);margin-top:4px">${t}</div>
+      </div>`;
+    case 'error':
+      return `<div class="event error">
+        <div class="error-stage">❌ ${e.stage.toUpperCase()} 错误　<span style="font-size:10px;color:var(--dim)">${t}</span></div>
+        <div class="error-msg">${escHtml(e.msg)}</div>
+      </div>`;
+    default:
+      return '';
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function fmtTime(ms) {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+}
+
+function avg(arr) {
+  if (!arr.length) return 0;
+  return arr.reduce((a,b) => a+b, 0) / arr.length;
+}
+
+function escHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function skipLabel(reason) {
+  const m = {too_short:'音频太短',empty_asr:'未识别到文字',wake_word:'唤醒词未匹配',after_wake_word:'唤醒词后无内容'};
+  return `⏭ ${m[reason] || reason}`;
+}
+
+init();
+</script>
+</body>
+</html>

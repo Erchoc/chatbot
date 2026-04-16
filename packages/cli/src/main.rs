@@ -3,6 +3,7 @@ mod cmd;
 mod config;
 pub mod history;
 pub mod i18n;
+pub mod log;
 mod llm;
 mod pipeline;
 mod speech;

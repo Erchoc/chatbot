@@ -1,0 +1,110 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.artifact }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            artifact: cb-macos-arm64
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            artifact: cb-macos-x86_64
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact: cb-linux-x86_64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact: cb-linux-arm64
+            use_cross: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            packages/cli/target
+          key: ${{ matrix.target }}-cargo-${{ hashFiles('packages/cli/Cargo.lock') }}
+          restore-keys: ${{ matrix.target }}-cargo-
+
+      - name: Install ALSA dev (Linux x86_64)
+        if: matrix.os == 'ubuntu-latest' && !matrix.use_cross
+        run: sudo apt-get install -y libasound2-dev
+
+      - name: Install cross
+        if: matrix.use_cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
+      - name: Build (cross)
+        if: matrix.use_cross
+        run: cross build --release --manifest-path packages/cli/Cargo.toml --target ${{ matrix.target }}
+
+      - name: Build (native)
+        if: '!matrix.use_cross'
+        run: cargo build --release --manifest-path packages/cli/Cargo.toml --target ${{ matrix.target }}
+
+      - name: Package binary
+        run: |
+          BIN=packages/cli/target/${{ matrix.target }}/release/cb
+          strip "$BIN" 2>/dev/null || true
+          cp "$BIN" ${{ matrix.artifact }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Compute checksums
+        run: |
+          cd artifacts
+          for dir in */; do
+            file="${dir%/}"
+            sha256sum "$file/$file" > "$file/$file.sha256"
+          done
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/cb-macos-arm64/cb-macos-arm64
+            artifacts/cb-macos-arm64/cb-macos-arm64.sha256
+            artifacts/cb-macos-x86_64/cb-macos-x86_64
+            artifacts/cb-macos-x86_64/cb-macos-x86_64.sha256
+            artifacts/cb-linux-x86_64/cb-linux-x86_64
+            artifacts/cb-linux-x86_64/cb-linux-x86_64.sha256
+            artifacts/cb-linux-arm64/cb-linux-arm64
+            artifacts/cb-linux-arm64/cb-linux-arm64.sha256

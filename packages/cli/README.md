@@ -11,14 +11,17 @@ A cross-platform voice assistant CLI that runs on macOS and Linux. Talk to an AI
 ### Install
 
 ```bash
-# Homebrew (macOS)
-brew install erchoc/tap/chatbox
-
-# Install script
-curl https://chatbox.longye.site/install.sh | bash
+# One-line install (macOS & Linux)
+curl -fsSL https://chatbox.longye.site/install.sh | bash
 
 # Build from source
-cd packages/cli && cargo install --path .
+cd packages/cli && cargo install --path . --root ~/.local
+```
+
+The binary is installed to `~/.local/bin/cb`. Add it to PATH if needed:
+
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc  # or ~/.bashrc
 ```
 
 ### Usage
@@ -37,11 +40,11 @@ cb config show
 cb config set llm.model deepseek-chat
 cb config set speech.doubao.voice_type BV700_V2_streaming
 
-# Daemon mode (coming soon)
-cb up
-
-# Open local web UI (coming soon)
+# Open local web dashboard
 cb open
+
+# Run as background daemon
+cb up
 
 # Debug mode
 cb --debug
@@ -49,16 +52,29 @@ cb --debug
 
 ### Configuration
 
-Config file: `~/.config/chatbox/config.toml`. Environment variables override config file values (compatible with `.env`):
+Config file: `~/.config/chatbox/config.toml`. Run `cb config` for the interactive wizard.
 
 | Env Var | Config Key | Description |
 |---------|-----------|-------------|
-| AI_API_KEY | llm.api_key | LLM API key |
-| AI_BASE_URL | llm.base_url | LLM service URL |
-| AI_MODEL | llm.model | Model name |
+| AI_API_KEY | llm.profiles[].api_key | LLM API key |
+| AI_BASE_URL | llm.profiles[].base_url | LLM service URL |
+| AI_MODEL | llm.profiles[].model | Model name |
 | DOUBAO_APP_ID | speech.doubao.app_id | Doubao App ID |
 | DOUBAO_ACCESS_TOKEN | speech.doubao.access_token | Doubao token |
 | DOUBAO_VOICE_TYPE | speech.doubao.voice_type | TTS voice type |
+
+### Dashboard
+
+Run `cb open` to launch a local web dashboard at `http://localhost:<port>/dashboard`.
+
+- Real-time conversation timeline with STT/LLM/TTS latency metrics
+- Per-session event log with error and skip details
+- Historical log browsing by date
+- Auto-polls every 2.5 seconds; live indicator turns green when active
+
+### Wake Word
+
+Enable in `cb config` → Persona. Once set, the assistant sleeps until it hears the wake word (e.g. `嘿小派`). After activation it stays awake for 5 minutes, renewing on each interaction. Homophone matching (e.g. `黑小派` → `嘿小派`) is supported via pinyin comparison.
 
 ### Architecture
 
@@ -67,28 +83,24 @@ See [DESIGN.md](./DESIGN.md) for the full architecture document.
 ```
 src/
 ├── main.rs         # CLI entry (clap)
-├── cmd/            # Subcommands: chat, config, up, open
+├── cmd/            # Subcommands: chat, config, install, open
 ├── audio/          # Audio capture, playback, resampling
 ├── speech/         # Speech service abstraction (trait Asr/Tts) + Doubao impl
 ├── llm/            # OpenAI-compatible streaming client
-├── config/         # TOML config management + env var fallback
-└── pipeline/       # Voice chat orchestration (audio→ASR→LLM→TTS→playback)
+├── config/         # TOML config + env var fallback + multi-profile LLM
+├── pipeline/       # Voice chat orchestration (audio→ASR→LLM→TTS→playback)
+├── log/            # Structured event logging (JSONL, per-file rotation)
+└── ui/             # Terminal UI: spinner, arrow-key selector, theme
 ```
-
-### Extensibility
-
-- **Swappable speech providers**: Implement `Asr` / `Tts` traits to plug in new STT/TTS services (e.g. Whisper, Azure, edge-tts)
-- **LLM provider agnostic**: Any OpenAI-compatible API works (DeepSeek, Claude, GPT, etc.)
-- **Config priority**: CLI args > env vars > config file > defaults
 
 ### Cross-platform Support
 
 | Platform | Audio Backend | Status |
 |----------|--------------|--------|
-| macOS (Apple Silicon) | CoreAudio | Supported |
-| macOS (Intel) | CoreAudio | Supported |
-| Linux (x86_64) | ALSA | Supported |
-| Linux (aarch64) | ALSA | Supported |
+| macOS (Apple Silicon) | CoreAudio | ✓ |
+| macOS (Intel) | CoreAudio | ✓ |
+| Linux (x86_64) | ALSA | ✓ |
+| Linux (aarch64) | ALSA | ✓ |
 
 Linux builds require `libasound2-dev`.
 
@@ -105,9 +117,9 @@ cd packages/cli
 cargo run
 cargo run -- --debug
 
-# Build release
-pnpm cli:build        # Output: packages/cli/target/release/cb
-pnpm cli:install      # Install to ~/.cargo/bin/cb
+# Build release binary
+cargo build --release
+# Binary: target/release/cb
 ```
 
 ---
@@ -119,14 +131,17 @@ pnpm cli:install      # Install to ~/.cargo/bin/cb
 ### 安装
 
 ```bash
-# Homebrew (macOS)
-brew install erchoc/tap/chatbox
-
-# 安装脚本
-curl https://chatbox.longye.site/install.sh | bash
+# 一键安装（macOS & Linux）
+curl -fsSL https://chatbox.longye.site/install.sh | bash
 
 # 从源码编译
-cd packages/cli && cargo install --path .
+cd packages/cli && cargo install --path . --root ~/.local
+```
+
+二进制安装到 `~/.local/bin/cb`，如未在 PATH 中请添加：
+
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc  # 或 ~/.bashrc
 ```
 
 ### 使用方法
@@ -145,11 +160,11 @@ cb config show
 cb config set llm.model deepseek-chat
 cb config set speech.doubao.voice_type BV700_V2_streaming
 
-# 守护进程模式（开发中）
-cb up
-
-# 打开本地网页（开发中）
+# 打开本地网页控制台
 cb open
+
+# 以守护进程运行
+cb up
 
 # 调试模式
 cb --debug
@@ -157,16 +172,29 @@ cb --debug
 
 ### 配置
 
-配置文件位于 `~/.config/chatbox/config.toml`，也支持环境变量覆盖（兼容 `.env`）：
+配置文件位于 `~/.config/chatbox/config.toml`，运行 `cb config` 进入交互向导。
 
 | 环境变量 | 配置项 | 说明 |
 |----------|--------|------|
-| AI_API_KEY | llm.api_key | LLM API Key |
-| AI_BASE_URL | llm.base_url | LLM 服务地址 |
-| AI_MODEL | llm.model | 模型名称 |
+| AI_API_KEY | llm.profiles[].api_key | LLM API Key |
+| AI_BASE_URL | llm.profiles[].base_url | LLM 服务地址 |
+| AI_MODEL | llm.profiles[].model | 模型名称 |
 | DOUBAO_APP_ID | speech.doubao.app_id | 豆包 App ID |
 | DOUBAO_ACCESS_TOKEN | speech.doubao.access_token | 豆包 Token |
 | DOUBAO_VOICE_TYPE | speech.doubao.voice_type | TTS 音色 |
+
+### 控制台
+
+运行 `cb open` 在本地启动 `http://localhost:<port>/dashboard`：
+
+- 实时对话时间线，含 STT/LLM/TTS 延迟指标
+- 分会话事件日志，含错误和跳过详情
+- 历史日志按日期浏览
+- 每 2.5 秒自动轮询，活跃时绿色指示灯亮起
+
+### 唤醒词
+
+在 `cb config` → 助手设置中开启。设定后，助手进入待机，听到唤醒词（如 `嘿小派`）才响应，激活后 5 分钟内持续对话，每次交互自动续期。支持同音字识别（如 `黑小派` = `嘿小派`）。
 
 ### 架构
 
@@ -175,28 +203,24 @@ cb --debug
 ```
 src/
 ├── main.rs         # CLI 入口 (clap)
-├── cmd/            # 子命令：chat, config, up, open
+├── cmd/            # 子命令：chat, config, install, open
 ├── audio/          # 音频采集、播放、重采样
 ├── speech/         # 语音服务抽象 (trait Asr/Tts) + 豆包实现
 ├── llm/            # OpenAI 兼容流式客户端
-├── config/         # TOML 配置管理 + 环境变量 fallback
-└── pipeline/       # 语音对话编排 (audio→ASR→LLM→TTS→playback)
+├── config/         # TOML 配置 + 环境变量 + 多 LLM Profile
+├── pipeline/       # 语音对话编排 (audio→ASR→LLM→TTS→playback)
+├── log/            # 结构化事件日志（JSONL 分文件轮转）
+└── ui/             # 终端 UI：spinner、箭头选择器、主题色
 ```
-
-### 扩展性设计
-
-- **语音提供方可替换**：实现 `Asr` / `Tts` trait 即可接入新的 STT/TTS 服务
-- **LLM 已兼容 OpenAI 协议**：DeepSeek、Claude、GPT 等均可使用
-- **配置层级**：命令行参数 > 环境变量 > 配置文件 > 默认值
 
 ### 跨平台支持
 
 | 平台 | 音频后端 | 状态 |
 |------|----------|------|
-| macOS (Apple Silicon) | CoreAudio | 已支持 |
-| macOS (Intel) | CoreAudio | 已支持 |
-| Linux (x86_64) | ALSA | 已支持 |
-| Linux (aarch64) | ALSA | 已支持 |
+| macOS (Apple Silicon) | CoreAudio | ✓ |
+| macOS (Intel) | CoreAudio | ✓ |
+| Linux (x86_64) | ALSA | ✓ |
+| Linux (aarch64) | ALSA | ✓ |
 
 Linux 编译需安装 `libasound2-dev`。
 
@@ -214,6 +238,6 @@ cargo run
 cargo run -- --debug
 
 # 构建发布版
-pnpm cli:build        # 产物: packages/cli/target/release/cb
-pnpm cli:install      # 安装到 ~/.cargo/bin/cb
+cargo build --release
+# 产物：target/release/cb
 ```

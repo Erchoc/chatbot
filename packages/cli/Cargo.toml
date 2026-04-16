@@ -1,6 +1,6 @@
 [package]
 name = "chatbox"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "跨平台语音助手 CLI"
 license = "MIT"
@@ -42,6 +42,8 @@ uuid = { version = "1", features = ["v4"] }
 dirs = "6"
 ctrlc = "3.4"
 dotenvy = "0.15"
+crossterm = "0.28"
+pinyin = "0.10"
 
 [profile.release]
 opt-level = "z"
