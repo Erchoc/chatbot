@@ -15,7 +15,10 @@
     "lint:fix": "biome check --write .",
     "typecheck": "pnpm -r typecheck",
     "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
-    "local_chat": "bash scripts/local_python_chat/setup.sh -y"
+    "local_chat": "bash scripts/local_python_chat/setup.sh -y",
+    "remote_chat": "bash scripts/remote_rust_chat/setup.sh -y",
+    "remote_chat:dev": "bash scripts/remote_rust_chat/setup.sh -y --dev",
+    "remote_chat:debug": "bash scripts/remote_rust_chat/setup.sh -y --dev --debug"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",

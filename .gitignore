@@ -5,3 +5,5 @@ packages/*/dist
 *.log
 .DS_Store
 .env
+# Rust
+target/
