@@ -34,6 +34,8 @@ pnpm ship          # 部署到 Fly/Runway/Vercel
 |------|------|
 | packages/web | 前端（Vite + React）|
 | packages/server | 后端 + 静态文件托管 |
+| packages/cli | 跨平台语音助手 CLI（Rust，`cb` 命令）|
+| scripts/remote_rust_chat | 远程语音聊天原型（Rust 脚本）|
 
 ## 验收标准
 

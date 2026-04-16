@@ -16,9 +16,13 @@
     "typecheck": "pnpm -r typecheck",
     "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
     "local_chat": "bash scripts/local_python_chat/setup.sh -y",
+    "local_chat:debug": "bash scripts/local_python_chat/setup.sh -y --debug",
     "remote_chat": "bash scripts/remote_rust_chat/setup.sh -y",
-    "remote_chat:dev": "bash scripts/remote_rust_chat/setup.sh -y --dev",
-    "remote_chat:debug": "bash scripts/remote_rust_chat/setup.sh -y --dev --debug"
+    "remote_chat:debug": "bash scripts/remote_rust_chat/setup.sh -y --dev --debug",
+    "cli": "cargo run --manifest-path packages/cli/Cargo.toml",
+    "cli:debug": "cargo run --manifest-path packages/cli/Cargo.toml -- --debug",
+    "cli:build": "cargo build --manifest-path packages/cli/Cargo.toml --release",
+    "cli:install": "cargo build --manifest-path packages/cli/Cargo.toml --release && mkdir -p ~/.local/bin && cp packages/cli/target/release/cb ~/.local/bin/cb && echo '✓ Installed cb to ~/.local/bin/cb'"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",

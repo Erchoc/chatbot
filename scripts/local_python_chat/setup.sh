@@ -9,9 +9,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 YES=false
 
 # ── 参数解析 ──────────────────────────────────────────────
+CHAT_ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -y|--yes) YES=true; shift ;;
+    --debug) CHAT_ARGS+=("--debug"); shift ;;
+    --list-devices) CHAT_ARGS+=("--list-devices"); shift ;;
+    --device) CHAT_ARGS+=("--device" "$2"); shift 2 ;;
     *) echo "未知参数: $1"; exit 1 ;;
   esac
 done
@@ -86,4 +90,4 @@ echo "  Ctrl+C 退出"
 echo "=========================================="
 echo ""
 
-exec uv run python "$SCRIPT_DIR/chat.py"
+exec uv run python "$SCRIPT_DIR/chat.py" "${CHAT_ARGS[@]}"

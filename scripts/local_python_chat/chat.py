@@ -66,7 +66,8 @@ SILENCE_SECONDS      = 0.8
 MIN_SPEECH_SECONDS   = 0.6
 MIN_LOUD_CHUNKS      = 8
 SPEECH_START_CHUNKS  = 5
-INTERRUPT_LOUD_COUNT = 3
+INTERRUPT_LOUD_COUNT = 8       # consecutive loud chunks to trigger interrupt
+INTERRUPT_THRESHOLD_MULT = 3.0 # interrupt threshold = speech threshold * this
 RATE                 = 16000
 CHUNK                = 1024
 TTS_SPEED            = 1.3
@@ -90,6 +91,11 @@ HALLUCINATIONS = {
 
 DIM   = "\033[90m"
 RESET = "\033[0m"
+DEBUG = False
+
+def debug_log(msg: str) -> None:
+    if DEBUG:
+        print(f"   [DEBUG] {msg}", flush=True)
 
 def chunk_volume(data: bytes) -> float:
     return np.abs(np.frombuffer(data, dtype=np.int16)).mean()
@@ -205,7 +211,11 @@ def calibrate_noise(device: int | None) -> int:
 
 # ============ 语音打断监听 ============
 def listen_for_interrupt(threshold: int, device: int | None) -> None:
+    """Monitor mic during playback. Only interrupt on genuine speech, not speaker echo."""
     global stop_speaking
+
+    # Use a much higher threshold to avoid speaker-echo self-interruption
+    interrupt_threshold = int(threshold * INTERRUPT_THRESHOLD_MULT)
 
     p = pyaudio.PyAudio()
     try:
@@ -215,12 +225,21 @@ def listen_for_interrupt(threshold: int, device: int | None) -> None:
         p.terminate()
         return
 
+    # Skip the first ~0.3s of playback to avoid initial burst
+    warmup_chunks = int(RATE / CHUNK * 0.3)
+    warmup = 0
+
     loud_count = 0
     while is_speaking:
         try:
             data = stream.read(CHUNK, exception_on_overflow=False)
+
+            warmup += 1
+            if warmup < warmup_chunks:
+                continue
+
             volume = chunk_volume(data)
-            if volume > threshold:
+            if volume > interrupt_threshold:
                 loud_count += 1
                 if loud_count >= INTERRUPT_LOUD_COUNT:
                     stop_speaking = True
@@ -345,7 +364,7 @@ def chat_and_speak(
         t = time.time()
         audio = edge_tts_to_audio(text)
         state["tts_ms"] += (time.time() - t) * 1000
-        print(f"\n   [DEBUG] TTS 合成完成，audio 长度: {len(audio) if audio is not None else 0}", flush=True)
+        debug_log(f"TTS done, audio length: {len(audio) if audio is not None else 0}")
         if audio is not None and not stop_speaking:
             audio_q.put(audio)
 
@@ -390,12 +409,12 @@ def chat_and_speak(
                 break
             if not stop_speaking:
                 try:
-                    print(f"   [DEBUG] 开始播放音频...", flush=True)
+                    debug_log("Playing audio...")
                     sd.play(item, TTS_SAMPLE_RATE)
                     sd.wait()
-                    print(f"   [DEBUG] 音频播放完成", flush=True)
+                    debug_log("Audio playback done")
                 except Exception as e:
-                    print(f"\n   [DEBUG] 播放异常: {e}", flush=True)
+                    debug_log(f"Playback error: {e}")
 
     prod_t = threading.Thread(target=producer, daemon=True)
     cons_t = threading.Thread(target=consumer, daemon=True)
@@ -420,7 +439,11 @@ def main():
     parser = argparse.ArgumentParser(description="语音对话机器人")
     parser.add_argument("--list-devices", action="store_true", help="列出麦克风设备后退出")
     parser.add_argument("--device", type=int, default=None, metavar="N", help="指定麦克风设备编号")
+    parser.add_argument("--debug", action="store_true", help="启用调试日志")
     args = parser.parse_args()
+
+    global DEBUG
+    DEBUG = args.debug
 
     if args.list_devices:
         list_audio_devices()
