@@ -139,6 +139,52 @@ fn ensure_codesign(cb_bin: &PathBuf) {
     }
 }
 
+/// Open the microphone briefly to trigger the macOS TCC permission dialog.
+/// This must happen in a foreground terminal context — launchd daemons
+/// cannot present the dialog, causing infinite re-prompts.
+fn request_microphone_permission() -> Result<()> {
+    use crate::audio::capture::get_input_device_info;
+
+    println!("  Checking microphone access...");
+
+    match get_input_device_info() {
+        Ok((device, config, _)) => {
+            // Actually open the stream — this is what triggers the TCC prompt
+            use cpal::traits::{DeviceTrait, StreamTrait};
+            let stream = device.build_input_stream(
+                &config,
+                |_data: &[f32], _: &cpal::InputCallbackInfo| {},
+                |err| eprintln!("  mic check error: {err}"),
+                None,
+            );
+            match stream {
+                Ok(s) => {
+                    // Keep stream alive briefly so macOS registers the access
+                    s.play().ok();
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    drop(s);
+                    println!("  Microphone access ✓");
+                }
+                Err(e) => {
+                    anyhow::bail!(
+                        "无法访问麦克风: {e}\n\
+                         请在 系统设置 → 隐私与安全 → 麦克风 中允许终端应用访问麦克风，\n\
+                         然后重新运行 `cb install`"
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            anyhow::bail!(
+                "未检测到麦克风: {e}\n\
+                 请连接麦克风后重新运行 `cb install`"
+            );
+        }
+    }
+
+    Ok(())
+}
+
 // === macOS: launchd ===
 
 fn launchd_plist_path() -> PathBuf {
@@ -156,8 +202,13 @@ fn launchd_log_dir() -> PathBuf {
 
 fn install_launchd(cb_bin: &PathBuf) -> Result<()> {
     // Ad-hoc sign with microphone entitlement if not already properly signed.
-    // Without this, macOS TCC will repeatedly prompt for microphone access.
     ensure_codesign(cb_bin);
+
+    // Trigger microphone authorization NOW while we have a terminal/GUI context.
+    // launchd daemons cannot show the macOS permission dialog, so the user
+    // must grant access here. Without this, the daemon would trigger repeated
+    // permission popups on every restart.
+    request_microphone_permission()?;
 
     let plist_path = launchd_plist_path();
     let log_dir = launchd_log_dir();
