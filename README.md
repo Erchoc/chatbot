@@ -1,6 +1,6 @@
 # chatbot
 
-> 模式：SPA（Vite + React + Fastify）
+> 模式：SPA（Vite + React + Http Service）
 
 ## 快速启动
 
@@ -25,7 +25,7 @@ pnpm verify        # lint + typecheck + test + build
 ## 部署
 
 ```bash
-pnpm ship          # 部署到 Fly.io
+pnpm ship          # 部署到 Fly/Runway/Vercel
 ```
 
 ## 目录说明
@@ -33,8 +33,7 @@ pnpm ship          # 部署到 Fly.io
 | 目录 | 说明 |
 |------|------|
 | packages/web | 前端（Vite + React）|
-| packages/server | 后端（Fastify）+ 静态文件托管 |
-| packages/shared | 跨包共享工具 |
+| packages/server | 后端 + 静态文件托管 |
 
 ## 验收标准
 
@@ -44,3 +43,4 @@ pnpm ship          # 部署到 Fly.io
 - [ ] `pnpm typecheck` 无错误
 - [ ] `GET /health` 返回 200
 - [ ] `pnpm ship` 部署成功
+
