@@ -1,14 +1,16 @@
 use std::io::{Read as IoRead, Write};
 use std::time::Instant;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
-use tokio_tungstenite::tungstenite::Message as WsMessage;
+use tokio_tungstenite::tungstenite::{
+    client::IntoClientRequest, Error as WsError, Message as WsMessage,
+};
 use uuid::Uuid;
 
 use crate::config::DoubaoConfig;
@@ -56,25 +58,35 @@ impl Asr for DoubaoAsr {
             self.cfg.app_id
         );
 
-        let request = tokio_tungstenite::tungstenite::http::Request::builder()
-            .uri(&self.cfg.asr_url)
-            .header("X-Api-App-Key", &self.cfg.app_id)
-            .header("X-Api-Access-Key", &self.cfg.access_token)
-            .header("X-Api-Resource-Id", &self.cfg.asr_resource_id)
-            .header("X-Api-Connect-Id", &connect_id)
-            .header("Host", "openspeech.bytedance.com")
-            .header("Connection", "Upgrade")
-            .header("Upgrade", "websocket")
-            .header("Sec-WebSocket-Version", "13")
-            .header(
-                "Sec-WebSocket-Key",
-                tokio_tungstenite::tungstenite::handshake::client::generate_key(),
-            )
-            .body(())?;
+        let mut request = self.cfg.asr_url.as_str().into_client_request()?;
+        {
+            let headers = request.headers_mut();
+            headers.insert("X-Api-App-Key", self.cfg.app_id.parse()?);
+            headers.insert("X-Api-Access-Key", self.cfg.access_token.parse()?);
+            headers.insert("X-Api-Resource-Id", self.cfg.asr_resource_id.parse()?);
+            headers.insert("X-Api-Connect-Id", connect_id.parse()?);
+        }
 
-        let (mut ws, _) = tokio_tungstenite::connect_async(request)
-            .await
-            .context("ASR WebSocket connection failed")?;
+        let (mut ws, _) = tokio_tungstenite::connect_async(request).await.map_err(|e| match e {
+            WsError::Http(resp) => {
+                let status = resp.status();
+                let logid = resp
+                    .headers()
+                    .get("x-tt-logid")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("-");
+                if status == tokio_tungstenite::tungstenite::http::StatusCode::UNAUTHORIZED {
+                    anyhow::anyhow!(
+                        "ASR WebSocket connection failed: HTTP {status} (x-tt-logid={logid}). Check app_id/access_token/asr_resource_id"
+                    )
+                } else {
+                    anyhow::anyhow!(
+                        "ASR WebSocket connection failed: HTTP {status} (x-tt-logid={logid})"
+                    )
+                }
+            }
+            other => anyhow::anyhow!("ASR WebSocket connection failed: {other}"),
+        })?;
 
         // 1. Send config frame
         let req_json = json!({

@@ -28,7 +28,9 @@ use futures_util::{SinkExt, StreamExt};
 use reqwest::Client;
 use rodio::{Decoder, OutputStream, Sink};
 use serde_json::{json, Value};
-use tokio_tungstenite::tungstenite::Message as WsMessage;
+use tokio_tungstenite::tungstenite::{
+    client::IntoClientRequest, Error as WsError, Message as WsMessage,
+};
 use uuid::Uuid;
 
 // ============ 常量 ============
@@ -500,25 +502,33 @@ async fn doubao_asr(
     );
 
     // 建立 WebSocket 连接 (v3 用 X-Api 系列 header 认证)
-    let request = tokio_tungstenite::tungstenite::http::Request::builder()
-        .uri(&cfg.doubao_asr_url)
-        .header("X-Api-App-Key", &cfg.doubao_app_id)
-        .header("X-Api-Access-Key", &cfg.doubao_access_token)
-        .header("X-Api-Resource-Id", &cfg.doubao_asr_resource_id)
-        .header("X-Api-Connect-Id", &connect_id)
-        .header("Host", "openspeech.bytedance.com")
-        .header("Connection", "Upgrade")
-        .header("Upgrade", "websocket")
-        .header("Sec-WebSocket-Version", "13")
-        .header(
-            "Sec-WebSocket-Key",
-            tokio_tungstenite::tungstenite::handshake::client::generate_key(),
-        )
-        .body(())?;
+    let mut request = cfg.doubao_asr_url.as_str().into_client_request()?;
+    {
+        let headers = request.headers_mut();
+        headers.insert("X-Api-App-Key", cfg.doubao_app_id.parse()?);
+        headers.insert("X-Api-Access-Key", cfg.doubao_access_token.parse()?);
+        headers.insert("X-Api-Resource-Id", cfg.doubao_asr_resource_id.parse()?);
+        headers.insert("X-Api-Connect-Id", connect_id.parse()?);
+    }
 
-    let (mut ws, _) = tokio_tungstenite::connect_async(request)
-        .await
-        .context("ASR WebSocket 连接失败")?;
+    let (mut ws, _) = tokio_tungstenite::connect_async(request).await.map_err(|e| match e {
+        WsError::Http(resp) => {
+            let status = resp.status();
+            let logid = resp
+                .headers()
+                .get("x-tt-logid")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("-");
+            if status == tokio_tungstenite::tungstenite::http::StatusCode::UNAUTHORIZED {
+                anyhow::anyhow!(
+                    "ASR WebSocket 连接失败: HTTP {status} (x-tt-logid={logid})。请检查 DOUBAO_APP_ID / DOUBAO_ACCESS_TOKEN / DOUBAO_ASR_RESOURCE_ID 是否同属一个语音应用"
+                )
+            } else {
+                anyhow::anyhow!("ASR WebSocket 连接失败: HTTP {status} (x-tt-logid={logid})")
+            }
+        }
+        other => anyhow::anyhow!("ASR WebSocket 连接失败: {other}"),
+    })?;
 
     // 1. 发送完整客户端请求 (配置帧)
     let req_json = json!({
@@ -985,7 +995,7 @@ async fn main() -> Result<()> {
         let (text, stt_ms) = match doubao_asr(&cfg, &audio, dev_info).await {
             Ok(v) => v,
             Err(e) => {
-                eprintln!("   {RED}❌ 语音识别失败: {e}{RESET}");
+                eprintln!("   {RED}❌ 语音识别失败: {e:#}{RESET}");
                 continue;
             }
         };

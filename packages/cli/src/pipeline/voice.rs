@@ -344,7 +344,7 @@ impl VoicePipeline {
                 }
                 Err(e) => {
                     think_spinner.stop();
-                    eprintln!("   {ERROR_COLOR}{}: {e}{RESET}", m.stt_failed);
+                    eprintln!("   {ERROR_COLOR}{}: {e:#}{RESET}", m.stt_failed);
                     eprintln!("   {MUTED}提示: 检查 Doubao 凭证是否正确 (cb config show){RESET}");
                     self.logger.error("asr", &e.to_string());
                     continue;
