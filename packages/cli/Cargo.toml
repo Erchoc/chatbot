@@ -1,5 +1,5 @@
 [package]
-name = "chatbox"
+name = "chatbot"
 version = "0.2.0"
 edition = "2021"
 description = "跨平台语音助手 CLI"
@@ -23,8 +23,8 @@ rodio = "0.19"
 hound = "3.5"
 
 # HTTP / WebSocket
-reqwest = { version = "0.12", features = ["json", "stream"] }
-tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 
 # Serialization

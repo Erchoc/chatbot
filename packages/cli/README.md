@@ -12,7 +12,7 @@ A cross-platform voice assistant CLI that runs on macOS and Linux. Talk to an AI
 
 ```bash
 # One-line install (macOS & Linux)
-curl -fsSL https://chatbox.longye.site/install.sh | bash
+curl -fsSL https://chatbot.longye.site/install.sh | bash
 
 # Build from source
 cd packages/cli && cargo install --path . --root ~/.local
@@ -52,7 +52,7 @@ cb --debug
 
 ### Configuration
 
-Config file: `~/.config/chatbox/config.toml`. Run `cb config` for the interactive wizard.
+Config file: `~/.config/chatbot/config.toml`. Run `cb config` for the interactive wizard.
 
 | Env Var | Config Key | Description |
 |---------|-----------|-------------|
@@ -132,7 +132,7 @@ cargo build --release
 
 ```bash
 # 一键安装（macOS & Linux）
-curl -fsSL https://chatbox.longye.site/install.sh | bash
+curl -fsSL https://chatbot.longye.site/install.sh | bash
 
 # 从源码编译
 cd packages/cli && cargo install --path . --root ~/.local
@@ -172,7 +172,7 @@ cb --debug
 
 ### 配置
 
-配置文件位于 `~/.config/chatbox/config.toml`，运行 `cb config` 进入交互向导。
+配置文件位于 `~/.config/chatbot/config.toml`，运行 `cb config` 进入交互向导。
 
 | 环境变量 | 配置项 | 说明 |
 |----------|--------|------|

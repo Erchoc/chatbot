@@ -62,11 +62,11 @@ impl Spinner {
     }
 
     /// Start a simple inline spinner: ⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏
-    pub fn start_inline(message: &str, color: &str) -> Self {
+    pub fn start_inline(message: &str, color: Color) -> Self {
         let running = Arc::new(AtomicBool::new(true));
         let r = running.clone();
         let msg = message.to_string();
-        let col = color.to_string();
+        let col = format!("{color}"); // render once, carry across thread boundary
 
         let handle = thread::spawn(move || {
             let dots = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];

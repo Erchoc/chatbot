@@ -1,6 +1,6 @@
 # CB CLI Architecture
 
-> Cross-platform voice assistant CLI. Binary name: `cb`. Install via `brew install erchoc/tap/chatbox`.
+> Cross-platform voice assistant CLI. Binary name: `cb`. Install via `brew install erchoc/tap/chatbot`.
 
 ## Directory Structure
 
@@ -71,11 +71,11 @@ pub trait Tts: Send + Sync {
 Priority (highest to lowest):
 1. CLI arguments (`--model`, `--voice`, etc.)
 2. Environment variables (`AI_API_KEY`, etc. — compatible with existing `.env`)
-3. Config file `~/.config/chatbox/config.toml`
+3. Config file `~/.config/chatbot/config.toml`
 4. Built-in defaults
 
 ```toml
-# ~/.config/chatbox/config.toml
+# ~/.config/chatbot/config.toml
 [llm]
 api_key = "sk-xxx"
 base_url = "https://api.deepseek.com"
@@ -101,7 +101,7 @@ min_speech_seconds = 1.0
 |-----------|-------|-------|
 | Audio capture | cpal (CoreAudio) | cpal (ALSA/PulseAudio) |
 | Audio playback | rodio (CoreAudio) | rodio (ALSA/PulseAudio) |
-| Config path | `~/.config/chatbox/` | `~/.config/chatbox/` |
+| Config path | `~/.config/chatbot/` | `~/.config/chatbot/` |
 | Install method | brew tap | curl install.sh / cargo install |
 
 Linux builds require `libasound2-dev` (ALSA), handled in CI.
@@ -150,8 +150,8 @@ cb --debug          # Enable debug logging
 
 - GitHub Actions CI: macOS (aarch64 + x86_64) + Linux (x86_64 + aarch64)
 - Release artifacts: `cb-{os}-{arch}` binary
-- Homebrew tap: `erchoc/tap/chatbox` formula pulls release binary
-- Install script: `curl https://chatbox.longye.site/install.sh | bash`
+- Homebrew tap: `erchoc/tap/chatbot` formula pulls release binary
+- Install script: `curl https://chatbot.longye.site/install.sh | bash`
 
 ### 7. Dependency Choices
 

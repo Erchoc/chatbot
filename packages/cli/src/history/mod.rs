@@ -4,9 +4,10 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 fn history_dir() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.config"))
-        .join("chatbox")
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".config")
+        .join("chatbot")
         .join("history")
 }
 

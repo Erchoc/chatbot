@@ -8,34 +8,15 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build ${{ matrix.artifact }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            artifact: cb-macos-arm64
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            artifact: cb-macos-x86_64
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            artifact: cb-linux-x86_64
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            artifact: cb-linux-arm64
-            use_cross: true
-
+  # ── macOS Universal Binary (arm64 + x86_64 → single fat binary) ───────────
+  build-macos:
+    name: Build macOS Universal
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -44,41 +25,105 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             packages/cli/target
-          key: ${{ matrix.target }}-cargo-${{ hashFiles('packages/cli/Cargo.lock') }}
-          restore-keys: ${{ matrix.target }}-cargo-
+          key: macos-universal-cargo-${{ hashFiles('packages/cli/Cargo.lock') }}
+          restore-keys: macos-universal-cargo-
 
-      - name: Install ALSA dev (Linux x86_64)
-        if: matrix.os == 'ubuntu-latest' && !matrix.use_cross
+      - name: Build arm64
+        run: cargo build --release --manifest-path packages/cli/Cargo.toml --target aarch64-apple-darwin
+
+      - name: Build x86_64
+        run: cargo build --release --manifest-path packages/cli/Cargo.toml --target x86_64-apple-darwin
+
+      - name: Create Universal Binary
+        run: |
+          lipo -create \
+            packages/cli/target/aarch64-apple-darwin/release/cb \
+            packages/cli/target/x86_64-apple-darwin/release/cb \
+            -output cb-macos-universal
+          strip cb-macos-universal
+          file cb-macos-universal
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cb-macos-universal
+          path: cb-macos-universal
+
+  # ── Linux x86_64 ──────────────────────────────────────────────────────────
+  build-linux-x86:
+    name: Build Linux x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            packages/cli/target
+          key: linux-x86-cargo-${{ hashFiles('packages/cli/Cargo.lock') }}
+          restore-keys: linux-x86-cargo-
+
+      - name: Install ALSA dev
         run: sudo apt-get install -y libasound2-dev
 
+      - name: Build
+        run: cargo build --release --manifest-path packages/cli/Cargo.toml --target x86_64-unknown-linux-gnu
+
+      - name: Package
+        run: |
+          cp packages/cli/target/x86_64-unknown-linux-gnu/release/cb cb-linux-x86_64
+          strip cb-linux-x86_64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cb-linux-x86_64
+          path: cb-linux-x86_64
+
+  # ── Linux aarch64 (cross-compiled) ────────────────────────────────────────
+  build-linux-arm:
+    name: Build Linux aarch64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            packages/cli/target
+          key: linux-arm-cargo-${{ hashFiles('packages/cli/Cargo.lock') }}
+          restore-keys: linux-arm-cargo-
+
       - name: Install cross
-        if: matrix.use_cross
         uses: taiki-e/install-action@v2
         with:
           tool: cross
 
-      - name: Build (cross)
-        if: matrix.use_cross
-        run: cross build --release --manifest-path packages/cli/Cargo.toml --target ${{ matrix.target }}
+      - name: Build
+        run: cross build --release --manifest-path packages/cli/Cargo.toml --target aarch64-unknown-linux-gnu
 
-      - name: Build (native)
-        if: '!matrix.use_cross'
-        run: cargo build --release --manifest-path packages/cli/Cargo.toml --target ${{ matrix.target }}
-
-      - name: Package binary
-        run: |
-          BIN=packages/cli/target/${{ matrix.target }}/release/cb
-          strip "$BIN" 2>/dev/null || true
-          cp "$BIN" ${{ matrix.artifact }}
+      - name: Package
+        run: cp packages/cli/target/aarch64-unknown-linux-gnu/release/cb cb-linux-arm64
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
+          name: cb-linux-arm64
+          path: cb-linux-arm64
 
+  # ── Create GitHub Release ─────────────────────────────────────────────────
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [build-macos, build-linux-x86, build-linux-arm]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -100,10 +145,8 @@ jobs:
         with:
           generate_release_notes: true
           files: |
-            artifacts/cb-macos-arm64/cb-macos-arm64
-            artifacts/cb-macos-arm64/cb-macos-arm64.sha256
-            artifacts/cb-macos-x86_64/cb-macos-x86_64
-            artifacts/cb-macos-x86_64/cb-macos-x86_64.sha256
+            artifacts/cb-macos-universal/cb-macos-universal
+            artifacts/cb-macos-universal/cb-macos-universal.sha256
             artifacts/cb-linux-x86_64/cb-linux-x86_64
             artifacts/cb-linux-x86_64/cb-linux-x86_64.sha256
             artifacts/cb-linux-arm64/cb-linux-arm64

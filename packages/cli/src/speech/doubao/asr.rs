@@ -78,7 +78,7 @@ impl Asr for DoubaoAsr {
 
         // 1. Send config frame
         let req_json = json!({
-            "user": { "uid": "chatbox_cli" },
+            "user": { "uid": "chatbot_cli" },
             "request": {
                 "reqid": Uuid::new_v4().to_string(),
                 "nbest": 1,

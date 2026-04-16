@@ -55,7 +55,10 @@ impl TurnMetrics {
 }
 
 fn is_sentence_end(c: char) -> bool {
-    matches!(c, '。' | '！' | '？' | '，' | ',' | '.' | '!' | '?' | '\n')
+    // Only true sentence-ending punctuation — NOT commas.
+    // Commas are mid-sentence pauses and shouldn't trigger a TTS split,
+    // otherwise the TTS engine gets fragments too short to synthesize.
+    matches!(c, '。' | '！' | '？' | '.' | '!' | '?' | '\n')
 }
 
 /// How long the assistant stays "awake" after the last interaction.
@@ -246,12 +249,10 @@ impl VoicePipeline {
             std::process::exit(0);
         })?;
 
-        let record_params = RecordParams {
-            silence_seconds: self.cfg.audio.silence_seconds,
-            min_speech_seconds: self.cfg.audio.min_speech_seconds,
-        };
+        let cfg_silence = self.cfg.audio.silence_seconds;
+        let cfg_min_speech = self.cfg.audio.min_speech_seconds;
 
-        let min_speech_s = self.cfg.audio.min_speech_seconds;
+        let min_speech_s = cfg_min_speech;
         let mut mic_backoff_secs = 0_u64;
 
         loop {
@@ -261,22 +262,25 @@ impl VoicePipeline {
 
             banner::separator();
 
-            let params_silence = record_params.silence_seconds;
-            let params_min_speech = record_params.min_speech_seconds;
+            // When the wake-word session is already active, lower the
+            // threshold by 30% so normal conversational speech is detected
+            // more reliably without needing to raise one's voice.
+            let wake_enabled = self.cfg.persona.wake_word.enabled;
+            let is_awake = self.wake_state.is_awake();
+            let threshold_scale = if wake_enabled && !is_awake { 1.0_f32 } else { 0.8 };
+
             let listening_msg = m.listening;
             let detected_msg = m.speech_detected;
             let too_short_msg = m.too_short;
-
-            // No spinner during listening — record_speech prints its own status
-            // The spinner would conflict with stdout from the blocking recording thread
 
             let audio = match tokio::task::spawn_blocking(move || {
                 record_speech(
                     threshold,
                     dev_info,
                     &RecordParams {
-                        silence_seconds: params_silence,
-                        min_speech_seconds: params_min_speech,
+                        silence_seconds: cfg_silence,
+                        min_speech_seconds: cfg_min_speech,
+                        threshold_scale,
                     },
                     listening_msg,
                     detected_msg,
@@ -314,7 +318,7 @@ impl VoicePipeline {
                     let mono16k = downsample_to_mono_16k(a, dev_info);
                     if mono16k.len() < min_samples {
                         println!("   {MUTED}音频太短，已跳过{RESET}");
-                        self.logger.skip("too_short", None);
+                        // Not logged — this is hardware noise / mic transient, not user intent.
                         continue;
                     }
                     a.clone()
@@ -354,7 +358,8 @@ impl VoicePipeline {
 
             if text.is_empty() || text.len() < 2 {
                 println!("   {MUTED}未识别到文字，已跳过{RESET}");
-                self.logger.skip("empty_asr", None);
+                // Not logged — empty ASR is almost always background noise
+                // or keyboard sound, not a deliberate user utterance.
                 continue;
             }
 

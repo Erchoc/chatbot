@@ -7,7 +7,6 @@ use tokio::net::TcpListener as AsyncTcpListener;
 use crate::history;
 use crate::log as cblog;
 
-const SITE_HTML: &str = include_str!("../../site/index.html");
 const DASHBOARD_HTML: &str = include_str!("../../site/dashboard.html");
 
 pub async fn run() -> Result<()> {
@@ -19,13 +18,11 @@ pub async fn run() -> Result<()> {
     let addr = format!("127.0.0.1:{port}");
     let listener = AsyncTcpListener::bind(&addr).await?;
     let base_url = format!("http://{addr}");
-    let dashboard_url = format!("{base_url}/dashboard");
-
-    println!("  \x1b[96m●\x1b[0m  Dashboard → \x1b[1m{dashboard_url}\x1b[0m");
+    println!("  \x1b[96m●\x1b[0m  Dashboard → \x1b[1m{base_url}\x1b[0m");
     println!("  \x1b[90m   Press Ctrl+C to stop\x1b[0m");
     println!();
 
-    open_browser(&dashboard_url);
+    open_browser(&base_url);
 
     loop {
         let (mut stream, _) = listener.accept().await?;
@@ -69,13 +66,7 @@ pub async fn run() -> Result<()> {
 
 fn route(path: &str, query: &str) -> (&'static str, &'static str, String) {
     match path {
-        "/" | "/index.html" => (
-            "200 OK",
-            "text/html; charset=utf-8",
-            SITE_HTML.to_string(),
-        ),
-
-        "/dashboard" => (
+        "/" | "/index.html" | "/dashboard" => (
             "200 OK",
             "text/html; charset=utf-8",
             DASHBOARD_HTML.to_string(),

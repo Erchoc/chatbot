@@ -24,7 +24,14 @@ impl DoubaoTts {
 #[async_trait]
 impl Tts for DoubaoTts {
     async fn synthesize(&self, text: &str) -> Result<Option<Vec<u8>>> {
-        if text.is_empty() {
+        // Skip empty or very short text — the TTS engine returns 500
+        // ("Init Engine Instance failed") on fragments like "。" or "呢"
+        let meaningful: usize = text
+            .trim()
+            .chars()
+            .filter(|c| c.is_alphanumeric())
+            .count();
+        if meaningful < 2 {
             return Ok(None);
         }
 
@@ -34,7 +41,7 @@ impl Tts for DoubaoTts {
                 "token": self.cfg.access_token,
                 "cluster": self.cfg.tts_cluster
             },
-            "user": { "uid": "chatbox_cli" },
+            "user": { "uid": "chatbot_cli" },
             "audio": {
                 "voice_type": self.cfg.voice_type,
                 "encoding": "mp3",
@@ -74,6 +81,11 @@ impl Tts for DoubaoTts {
                 .and_then(|m| m.as_str())
                 .unwrap_or("unknown");
             eprintln!("   {MUTED}TTS request failed: HTTP {status} - {msg}{RESET}");
+            if status == reqwest::StatusCode::UNAUTHORIZED && msg.contains("load grant") {
+                eprintln!(
+                    "   {MUTED}Hint: TTS 授权缺失或参数不匹配，请检查 app_id/access_token/tts_resource_id 是否同属一个语音应用{RESET}"
+                );
+            }
             return Ok(None);
         }
 

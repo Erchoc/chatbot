@@ -4,7 +4,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 
-const SERVICE_LABEL: &str = "com.erchoc.chatbox";
+const SERVICE_LABEL: &str = "com.erchoc.chatbot";
 const SERVICE_DESC: &str = "Chatbox voice assistant daemon";
 
 /// Install and start the daemon service
@@ -79,7 +79,7 @@ fn launchd_plist_path() -> PathBuf {
 fn launchd_log_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("~"))
-        .join("Library/Logs/chatbox")
+        .join("Library/Logs/chatbot")
 }
 
 fn install_launchd(cb_bin: &PathBuf) -> Result<()> {
@@ -203,29 +203,32 @@ fn uninstall_launchd() -> Result<()> {
 }
 
 fn status_launchd() -> Result<()> {
+    let plist_path = launchd_plist_path();
     let output = Command::new("launchctl")
         .args(["list", SERVICE_LABEL])
         .output()
         .context("Failed to run launchctl list")?;
 
     if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        println!("  Service status: running");
-        println!("{stdout}");
+        println!("  \x1b[92m●\x1b[0m  后台服务运行中");
+        let log_dir = launchd_log_dir();
+        println!("     日志目录: {}", log_dir.display());
+        println!("     配置文件: {}", plist_path.display());
+        println!();
+        println!("     \x1b[90m停止服务: cb uninstall\x1b[0m");
+        println!("     \x1b[90m查看日志: cb logs -f\x1b[0m");
+    } else if plist_path.exists() {
+        println!("  \x1b[93m●\x1b[0m  后台服务已安装但未运行");
+        println!("     配置文件: {}", plist_path.display());
+        println!();
+        println!("     \x1b[90m重新启动: launchctl load {}\x1b[0m", plist_path.display());
+        println!("     \x1b[90m完全卸载: cb uninstall\x1b[0m");
     } else {
-        println!("  Service status: not installed or not running");
+        println!("  \x1b[90m●\x1b[0m  后台服务未安装");
+        println!();
+        println!("     \x1b[90m安装并启动: cb install\x1b[0m");
+        println!("     \x1b[90m前台运行:   cb\x1b[0m");
     }
-
-    let plist_path = launchd_plist_path();
-    println!(
-        "  Plist: {} ({})",
-        plist_path.display(),
-        if plist_path.exists() {
-            "exists"
-        } else {
-            "not found"
-        }
-    );
     Ok(())
 }
 
@@ -239,7 +242,7 @@ fn systemd_service_path() -> PathBuf {
                 .join(".config")
         })
         .join("systemd/user")
-        .join("chatbox.service")
+        .join("chatbot.service")
 }
 
 fn install_systemd(cb_bin: &PathBuf) -> Result<()> {
@@ -247,7 +250,7 @@ fn install_systemd(cb_bin: &PathBuf) -> Result<()> {
 
     // Stop existing service if running (ignore errors)
     let _ = Command::new("systemctl")
-        .args(["--user", "stop", "chatbox.service"])
+        .args(["--user", "stop", "chatbot.service"])
         .output();
 
     let service_content = format!(
@@ -276,11 +279,11 @@ WantedBy=default.target
 
     // Reload, enable, and start
     run_cmd("systemctl", &["--user", "daemon-reload"])?;
-    run_cmd("systemctl", &["--user", "enable", "chatbox.service"])?;
-    run_cmd("systemctl", &["--user", "start", "chatbox.service"])?;
+    run_cmd("systemctl", &["--user", "enable", "chatbot.service"])?;
+    run_cmd("systemctl", &["--user", "start", "chatbot.service"])?;
 
     println!("  Service enabled and started");
-    println!("  Logs: journalctl --user -u chatbox.service -f");
+    println!("  Logs: journalctl --user -u chatbot.service -f");
     Ok(())
 }
 
@@ -289,10 +292,10 @@ fn uninstall_systemd() -> Result<()> {
 
     // Stop and disable
     let _ = Command::new("systemctl")
-        .args(["--user", "stop", "chatbox.service"])
+        .args(["--user", "stop", "chatbot.service"])
         .output();
     let _ = Command::new("systemctl")
-        .args(["--user", "disable", "chatbox.service"])
+        .args(["--user", "disable", "chatbot.service"])
         .output();
     println!("  Service stopped and disabled");
 
@@ -332,16 +335,31 @@ fn uninstall_systemd() -> Result<()> {
 }
 
 fn status_systemd() -> Result<()> {
+    let service_path = systemd_service_path();
     let output = Command::new("systemctl")
-        .args(["--user", "status", "chatbox.service"])
+        .args(["--user", "is-active", "chatbot.service"])
         .output()
-        .context("Failed to run systemctl status")?;
+        .context("Failed to run systemctl")?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if stdout.is_empty() {
-        println!("  Service status: not installed");
+    let state = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+    if state == "active" {
+        println!("  \x1b[92m●\x1b[0m  后台服务运行中");
+        println!("     配置文件: {}", service_path.display());
+        println!();
+        println!("     \x1b[90m查看日志: journalctl --user -u chatbot -f\x1b[0m");
+        println!("     \x1b[90m停止服务: cb uninstall\x1b[0m");
+    } else if service_path.exists() {
+        println!("  \x1b[93m●\x1b[0m  后台服务已安装但未运行 ({})", state);
+        println!("     配置文件: {}", service_path.display());
+        println!();
+        println!("     \x1b[90m重新启动: systemctl --user start chatbot\x1b[0m");
+        println!("     \x1b[90m完全卸载: cb uninstall\x1b[0m");
     } else {
-        print!("{stdout}");
+        println!("  \x1b[90m●\x1b[0m  后台服务未安装");
+        println!();
+        println!("     \x1b[90m安装并启动: cb install\x1b[0m");
+        println!("     \x1b[90m前台运行:   cb\x1b[0m");
     }
     Ok(())
 }

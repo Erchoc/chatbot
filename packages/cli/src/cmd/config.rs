@@ -4,8 +4,8 @@ use anyhow::Result;
 
 use crate::config::{
     is_real_value,
-    providers::{DOUBAO_VOICES, LLM_PRESETS},
-    AppConfig, LlmProfile, CONFIG_PATH_DISPLAY,
+    providers::{DOUBAO_VOICES, LLM_PRESETS, VoicePreset},
+    AppConfig, LlmProfile, config_path_display,
 };
 use crate::ui::{
     select::{self, SelectOption},
@@ -21,11 +21,12 @@ pub async fn run_wizard() -> Result<()> {
     wizard_persona(&mut cfg)?;
     wizard_llm_profiles(&mut cfg)?;
     wizard_speech(&mut cfg)?;
-    wizard_voice(&mut cfg)?;
+    wizard_voice(&mut cfg).await?;
 
     cfg.save()?;
     println!();
-    println!("   {BR_GREEN}✓{RESET}  已保存 → {MUTED}{CONFIG_PATH_DISPLAY}{RESET}");
+    let path = config_path_display();
+    println!("   {BR_GREEN}✓{RESET}  已保存 → {MUTED}{path}{RESET}");
     println!();
     Ok(())
 }
@@ -107,8 +108,9 @@ pub fn show() -> Result<()> {
     let cfg = AppConfig::load().unwrap_or_default();
 
     println!();
+    let path = config_path_display();
     println!(
-        "   {BOLD}当前配置{RESET}  {MUTED}{CONFIG_PATH_DISPLAY}{RESET}"
+        "   {BOLD}当前配置{RESET}  {MUTED}{path}{RESET}"
     );
     println!();
 
@@ -193,6 +195,10 @@ pub fn show() -> Result<()> {
         cfg.speech.doubao.voice_type, voice_label
     );
     println!("   {MUTED}语速{RESET}      {}x", cfg.speech.doubao.tts_speed);
+    println!("   {MUTED}TTS 资源{RESET}  {}", cfg.speech.doubao.tts_resource_id);
+    println!("   {MUTED}ASR 资源{RESET}  {}", cfg.speech.doubao.asr_resource_id);
+    println!("   {MUTED}TTS 集群{RESET}  {}", cfg.speech.doubao.tts_cluster);
+    println!("   {MUTED}TTS URL{RESET}   {}", cfg.speech.doubao.tts_url);
     println!();
 
     println!(
@@ -207,7 +213,10 @@ pub fn set(key: &str, value: &str) -> Result<()> {
     let mut cfg = AppConfig::load().unwrap_or_default();
 
     match key {
-        "persona.name" => cfg.persona.name = value.to_string(),
+        "persona.name" => {
+            cfg.persona.name = value.to_string();
+            cfg.persona.wake_word.word = format!("嘿{value}");
+        }
         "persona.language" | "locale" => {
             if value != "en" && value != "zh" {
                 anyhow::bail!("language 必须是 'en' 或 'zh'");
@@ -218,13 +227,18 @@ pub fn set(key: &str, value: &str) -> Result<()> {
             cfg.persona.wake_word.enabled = matches!(value, "true" | "1" | "yes" | "on");
         }
         "persona.wake_word.word" | "wake_word.word" => {
-            cfg.persona.wake_word.word = value.to_string();
+            anyhow::bail!("唤醒词根据助手名称自动生成，请修改 persona.name");
         }
         "speech.doubao.app_id" => cfg.speech.doubao.app_id = value.to_string(),
         "speech.doubao.access_token" => cfg.speech.doubao.access_token = value.to_string(),
+        "speech.doubao.tts_cluster" => cfg.speech.doubao.tts_cluster = value.to_string(),
+        "speech.doubao.asr_resource_id" => cfg.speech.doubao.asr_resource_id = value.to_string(),
+        "speech.doubao.tts_resource_id" => cfg.speech.doubao.tts_resource_id = value.to_string(),
         "speech.doubao.voice_type" => cfg.speech.doubao.voice_type = value.to_string(),
+        "speech.doubao.tts_url" => cfg.speech.doubao.tts_url = value.to_string(),
+        "speech.doubao.asr_url" => cfg.speech.doubao.asr_url = value.to_string(),
         "speech.doubao.tts_speed" => {
-            let n: f32 = value.parse().map_err(|_| anyhow::anyhow!("无效数字"))?;
+            let n: f64 = value.parse().map_err(|_| anyhow::anyhow!("无效数字"))?;
             if !(0.5..=2.0).contains(&n) {
                 anyhow::bail!("语速必须在 0.5 ~ 2.0 之间，当前值: {n}");
             }
@@ -241,8 +255,10 @@ pub fn set(key: &str, value: &str) -> Result<()> {
         _ => anyhow::bail!(
             "未知 key: {key}\n\
              可用: persona.name, persona.language, persona.wake_word.enabled, persona.wake_word.word,\n\
-             speech.doubao.app_id, speech.doubao.access_token, speech.doubao.voice_type,\n\
-             speech.doubao.tts_speed, audio.silence_seconds, audio.min_speech_seconds"
+             speech.doubao.app_id, speech.doubao.access_token, speech.doubao.tts_cluster,\n\
+             speech.doubao.asr_resource_id, speech.doubao.tts_resource_id, speech.doubao.voice_type,\n\
+             speech.doubao.tts_url, speech.doubao.asr_url, speech.doubao.tts_speed,\n\
+             audio.silence_seconds, audio.min_speech_seconds"
         ),
     }
 
@@ -283,26 +299,25 @@ fn wizard_persona(cfg: &mut AppConfig) -> Result<()> {
     }
     println!();
 
-    // Wake word
-    println!("   {MUTED}唤醒词（关闭则随时说话都会响应）:{RESET}");
+    // Wake word — auto-derived from assistant name
+    cfg.persona.wake_word.word = format!("嘿{}", cfg.persona.name);
+
+    println!("   {MUTED}唤醒词: 「{}」（基于助手名称自动生成）{RESET}", cfg.persona.wake_word.word);
     println!();
     let ww_opts = vec![
-        SelectOption::new("关闭", "随时响应").with_badge(
+        SelectOption::new("关闭", "随时说话都会响应").with_badge(
             if !cfg.persona.wake_word.enabled { "● 当前" } else { "" },
         ),
-        SelectOption::new("开启", "说唤醒词后才响应").with_badge(
+        SelectOption::new(
+            "开启",
+            format!("说「{}」后才响应", cfg.persona.wake_word.word),
+        ).with_badge(
             if cfg.persona.wake_word.enabled { "● 当前" } else { "" },
         ),
     ];
     let ww_default = if cfg.persona.wake_word.enabled { 1 } else { 0 };
     if let Some(idx) = select::run(&ww_opts, ww_default)? {
         cfg.persona.wake_word.enabled = idx == 1;
-    }
-    if cfg.persona.wake_word.enabled {
-        println!();
-        if let Some(v) = prompt_optional("   唤醒词", &cfg.persona.wake_word.word)? {
-            cfg.persona.wake_word.word = v;
-        }
     }
 
     Ok(())
@@ -319,7 +334,7 @@ fn wizard_llm_profiles(cfg: &mut AppConfig) -> Result<()> {
             .llm_profiles
             .iter()
             .map(|p| {
-                let hint = format!("{}", p.model);
+                let hint = p.model.to_string();
                 let badge = if p.name == cfg.active_llm || cfg.llm_profiles.len() == 1 {
                     "● 激活"
                 } else {
@@ -534,44 +549,97 @@ fn wizard_speech(cfg: &mut AppConfig) -> Result<()> {
     Ok(())
 }
 
-fn wizard_voice(cfg: &mut AppConfig) -> Result<()> {
+async fn wizard_voice(cfg: &mut AppConfig) -> Result<()> {
     print_step(4, 4, "音色");
+    println!("   {MUTED}音色列表: https://www.volcengine.com/docs/6561/97465{RESET}");
 
-    let current_idx = DOUBAO_VOICES
-        .iter()
-        .position(|v| v.id == cfg.speech.doubao.voice_type);
+    loop {
+        // Filter voices by language — zh_only voices hidden in English mode
+        let is_zh = cfg.persona.language == "zh";
+        let voices: Vec<&VoicePreset> = DOUBAO_VOICES
+            .iter()
+            .filter(|v| !v.zh_only || is_zh)
+            .collect();
 
-    println!("   {MUTED}选择 TTS 音色:{RESET}");
-    println!();
+        let current_idx = voices
+            .iter()
+            .position(|v| v.id == cfg.speech.doubao.voice_type);
 
-    let mut opts: Vec<SelectOption> = DOUBAO_VOICES
-        .iter()
-        .map(|v| {
-            let badge = if Some(v.id) == current_idx.map(|i| DOUBAO_VOICES[i].id) {
-                "● 当前"
-            } else {
-                ""
-            };
-            SelectOption::new(
-                format!("{:<8}  {}", v.name, v.style),
-                v.id,
-            )
-            .with_badge(badge)
-        })
-        .collect();
-    opts.push(SelectOption::new("Custom...", "输入自定义 Voice ID"));
+        println!("   {MUTED}选择 TTS 音色（选中后自动试听）:{RESET}");
+        println!();
 
-    let default_idx = current_idx.unwrap_or(0);
-    if let Some(choice) = select::run(&opts, default_idx)? {
-        if choice < DOUBAO_VOICES.len() {
-            cfg.speech.doubao.voice_type = DOUBAO_VOICES[choice].id.to_string();
+        let name_col = 10; // display-width columns for name
+        let style_col = 12; // display-width columns for style
+        let mut opts: Vec<SelectOption> = voices
+            .iter()
+            .map(|v| {
+                let badge = if Some(v.id) == current_idx.map(|i| voices[i].id) {
+                    "● 当前"
+                } else {
+                    ""
+                };
+                let label = format!(
+                    "{}  {}  {}",
+                    pad_display(v.name, name_col),
+                    pad_display(v.style, style_col),
+                    v.id,
+                );
+                SelectOption::new(label, "").with_badge(badge)
+            })
+            .collect();
+        opts.push(SelectOption::new(
+            format!("{}  {}", pad_display("Custom...", name_col), "输入自定义 Voice ID"),
+            "",
+        ));
+
+        let default_idx = current_idx.unwrap_or(0);
+        let choice = match select::run(&opts, default_idx)? {
+            Some(c) => c,
+            None => break,
+        };
+
+        if choice < voices.len() {
+            let voice = voices[choice];
+            let prev_voice = cfg.speech.doubao.voice_type.clone();
+            cfg.speech.doubao.voice_type = voice.id.to_string();
             println!(
                 "   {MUTED}音色: {} ({}){RESET}",
-                DOUBAO_VOICES[choice].name, DOUBAO_VOICES[choice].id
+                voice.name, voice.id
             );
+
+            // Preview — if it fails, restore old voice and go back
+            if !preview_voice(cfg).await {
+                cfg.speech.doubao.voice_type = prev_voice;
+                println!("   {MUTED}按 Enter 重新选择...{RESET}");
+                let mut tmp = String::new();
+                let _ = io::stdin().read_line(&mut tmp);
+                continue;
+            }
+
+            // Confirmed — only Enter to accept, r to re-select
+            print!("   {MUTED}Enter 确认 / r 重选: {RESET}");
+            io::stdout().flush()?;
+            let mut input = String::new();
+            io::stdin().read_line(&mut input)?;
+            if has_escape(&input) {
+                cfg.speech.doubao.voice_type = prev_voice;
+                anyhow::bail!("已取消");
+            }
+            let trimmed = input.trim();
+            if trimmed.is_empty() {
+                break; // Enter = confirm
+            }
+            if trimmed.eq_ignore_ascii_case("r") {
+                cfg.speech.doubao.voice_type = prev_voice;
+                continue; // back to selector
+            }
+            // Any other input — treat as confirm (voice already set)
+            break;
         } else {
             println!();
             cfg.speech.doubao.voice_type = prompt_required("   Voice ID")?;
+            preview_voice(cfg).await;
+            break;
         }
     }
 
@@ -580,8 +648,8 @@ fn wizard_voice(cfg: &mut AppConfig) -> Result<()> {
     loop {
         println!("   {MUTED}范围: 0.5（最慢）~ 2.0（最快），推荐 1.0~1.5{RESET}");
         match prompt_optional("   语速", &format!("{speed:.1}"))? {
-            None => break, // 回车保留当前值
-            Some(v) => match v.parse::<f32>() {
+            None => break,
+            Some(v) => match v.parse::<f64>() {
                 Ok(n) if (0.5..=2.0).contains(&n) => {
                     cfg.speech.doubao.tts_speed = n;
                     break;
@@ -595,13 +663,58 @@ fn wizard_voice(cfg: &mut AppConfig) -> Result<()> {
     Ok(())
 }
 
+/// Play a short TTS sample with the current voice config. Returns true on success.
+async fn preview_voice(cfg: &AppConfig) -> bool {
+    use crate::audio::playback::spawn_player;
+    use crate::speech::doubao::DoubaoTts;
+    use crate::speech::Tts;
+
+    let name = &cfg.persona.name;
+    let sample_text = match cfg.persona.language.as_str() {
+        "en" => format!("Hello, I am {name}, your voice assistant."),
+        _ => format!("你好，我是{name}，有什么可以帮你的吗？"),
+    };
+
+    println!("   {BR_CYAN}♪ 试听中...{RESET}");
+
+    let doubao_cfg = cfg.speech.doubao.clone();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+    let tts = DoubaoTts::new(client, doubao_cfg);
+    let result = tts.synthesize(&sample_text).await;
+
+    match result {
+        Ok(Some(mp3)) => {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let handle = spawn_player(rx, stop);
+            let _ = tx.send(mp3);
+            drop(tx);
+            let _ = handle.join();
+            println!("   {BR_GREEN}✓ 试听完成{RESET}");
+            true
+        }
+        Ok(None) => {
+            println!("   {BR_YELLOW}⚠ 该音色不可用，请选其他音色或检查凭证{RESET}");
+            false
+        }
+        Err(e) => {
+            println!("   {BR_RED}✖ 试听失败: {e:#}{RESET}");
+            false
+        }
+    }
+}
+
 // ─── UI helpers ───────────────────────────────────────────────────────────────
 
 fn print_wizard_header() {
+    let path = config_path_display();
     println!();
     println!("   {BR_CYAN}╭─────────────────────────────────────────────╮{RESET}");
     println!("   {BR_CYAN}│{RESET}  {BOLD}cb  配置向导{RESET}                             {BR_CYAN}│{RESET}");
-    println!("   {BR_CYAN}│{RESET}  {MUTED}{CONFIG_PATH_DISPLAY:<43}{RESET}  {BR_CYAN}│{RESET}");
+    println!("   {BR_CYAN}│{RESET}  {MUTED}{path:<43}{RESET}  {BR_CYAN}│{RESET}");
     println!("   {BR_CYAN}╰─────────────────────────────────────────────╯{RESET}");
 }
 
@@ -612,12 +725,20 @@ fn print_step(n: usize, total: usize, title: &str) {
     println!();
 }
 
+/// Check if input contains ESC / control characters (user pressed Esc).
+fn has_escape(s: &str) -> bool {
+    s.contains('\x1b')
+}
+
 fn prompt_required(label: &str) -> Result<String> {
     loop {
         print!("{label}: ");
         io::stdout().flush()?;
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
+        if has_escape(&input) {
+            anyhow::bail!("已取消");
+        }
         let trimmed = input.trim();
         if !trimmed.is_empty() {
             return Ok(trimmed.to_string());
@@ -634,6 +755,9 @@ fn prompt_optional(label: &str, current: &str) -> Result<Option<String>> {
     io::stdout().flush()?;
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
+    if has_escape(&input) {
+        anyhow::bail!("已取消");
+    }
     let trimmed = input.trim();
     if trimmed.is_empty() {
         Ok(None)

@@ -2,13 +2,80 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-pub const CONFIG_PATH_DISPLAY: &str = "~/.config/chatbox/config.toml";
+fn config_dir() -> PathBuf {
+    // Always use ~/.config/chatbot/ for cross-platform consistency.
+    // macOS dirs::config_dir() returns ~/Library/Application Support/ which
+    // is hard to type (spaces) and unexpected for CLI tool users.
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".config")
+        .join("chatbot")
+}
 
 fn config_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.config"))
-        .join("chatbox")
-        .join("config.toml")
+    config_dir().join("config.toml")
+}
+
+pub fn config_path_display() -> String {
+    "~/.config/chatbot/config.toml".to_string()
+}
+
+fn migrate_from_dir(old_dir: &PathBuf, new_path: &PathBuf) -> bool {
+    let old_path = old_dir.join("config.toml");
+    if !old_path.exists() {
+        return false;
+    }
+
+    if let Some(parent) = new_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    if std::fs::copy(&old_path, new_path).is_err() {
+        return false;
+    }
+
+    let _ = std::fs::remove_file(&old_path);
+
+    // Also migrate persisted runtime data if present.
+    let new_root = config_dir();
+    for name in ["history", "events"] {
+        let old_data = old_dir.join(name);
+        let new_data = new_root.join(name);
+        if old_data.exists() && !new_data.exists() {
+            let _ = std::fs::rename(old_data, new_data);
+        }
+    }
+
+    // Clean up old dir if it is empty after migration.
+    let _ = std::fs::remove_dir(old_dir);
+    true
+}
+
+/// Migrate config from historical locations (chatbox/chatbot, macOS/Linux)
+/// to the unified path (~/.config/chatbot/). Called once at startup.
+pub fn migrate_config_path() {
+    let new_path = config_path();
+    if new_path.exists() {
+        return; // already using the new location
+    }
+
+    let mut candidates: Vec<PathBuf> = vec![];
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join(".config").join("chatbox"));
+        candidates.push(home.join(".config").join("chatbot"));
+    }
+
+    if let Some(old_dir) = dirs::config_dir() {
+        // macOS historical path under ~/Library/Application Support/
+        candidates.push(old_dir.join("chatbox"));
+        candidates.push(old_dir.join("chatbot"));
+    }
+
+    for old in candidates {
+        if migrate_from_dir(&old, &new_path) {
+            break;
+        }
+    }
 }
 
 // ─── Top-level config ────────────────────────────────────────────────────────
@@ -114,7 +181,7 @@ pub struct DoubaoConfig {
     pub asr_resource_id: String,
     pub tts_resource_id: String,
     pub voice_type: String,
-    pub tts_speed: f32,
+    pub tts_speed: f64,
     pub tts_url: String,
     pub asr_url: String,
 }

@@ -1,4 +1,4 @@
-//! Structured event logging to ~/.local/share/chatbox/events/
+//! Structured event logging to ~/.local/share/chatbot/events/
 //!
 //! Three separate append-only JSONL files per date, each with a size cap:
 //!   turns-YYYY-MM-DD.jsonl   — conversation turns  (max 10 MB)
@@ -250,14 +250,11 @@ pub fn today_events() -> Vec<LogEntry> {
 
 // ─── Internals ────────────────────────────────────────────────────────────────
 
-fn log_dir() -> PathBuf {
-    dirs::data_local_dir()
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_default()
-                .join(".local/share")
-        })
-        .join("chatbox")
+pub fn log_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".config")
+        .join("chatbot")
         .join("events")
 }
 

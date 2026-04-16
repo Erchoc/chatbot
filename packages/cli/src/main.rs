@@ -24,18 +24,28 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Start voice chat in foreground (default)
-    Chat,
-    /// Run as daemon process (alias for `cb install`)
-    Up,
-    /// Install as system daemon (launchd on macOS, systemd on Linux)
+    /// Start voice chat, or send a text message directly
+    Chat {
+        /// Text to send (skip voice input). e.g. `cb chat hello`
+        message: Vec<String>,
+    },
+    /// Install as system daemon (launchd / systemd)
     Install,
-    /// Uninstall daemon and remove all service files
+    /// Uninstall daemon and remove service files
     Uninstall,
     /// Show daemon service status
     Status,
-    /// Open local web UI
+    /// Open local web dashboard
     Open,
+    /// View conversation event logs
+    Logs {
+        /// Follow log output in real-time
+        #[arg(short, long)]
+        follow: bool,
+        /// View logs for a specific date (YYYY-MM-DD)
+        #[arg(short, long)]
+        date: Option<String>,
+    },
     /// Manage configuration
     Config {
         #[command(subcommand)]
@@ -47,9 +57,9 @@ enum Commands {
 enum ConfigAction {
     /// Show current configuration
     Show,
-    /// Set a configuration value
+    /// Set a configuration value (e.g. `cb config set llm.model gpt-4o`)
     Set {
-        /// Config key (e.g. llm.model)
+        /// Config key
         key: String,
         /// Config value
         value: String,
@@ -58,6 +68,8 @@ enum ConfigAction {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    ui::theme::init_colors();
+    config::migrate_config_path();
     let cli = Cli::parse();
 
     if cli.debug {
@@ -65,11 +77,19 @@ async fn main() -> anyhow::Result<()> {
     }
 
     match cli.command {
-        None | Some(Commands::Chat) => cmd::chat::run(cli.debug).await,
-        Some(Commands::Up) | Some(Commands::Install) => cmd::install::run().await,
+        None => cmd::chat::run_voice(cli.debug).await,
+        Some(Commands::Chat { message }) => {
+            if message.is_empty() {
+                cmd::chat::run_voice(cli.debug).await
+            } else {
+                cmd::chat::run_text(&message.join(" "), cli.debug).await
+            }
+        }
+        Some(Commands::Install) => cmd::install::run().await,
         Some(Commands::Uninstall) => cmd::install::uninstall().await,
         Some(Commands::Status) => cmd::install::status().await,
         Some(Commands::Open) => cmd::open::run().await,
+        Some(Commands::Logs { follow, date }) => cmd::logs::run(follow, date).await,
         Some(Commands::Config { action }) => match action {
             None => cmd::config::run_wizard().await,
             Some(ConfigAction::Show) => cmd::config::show(),

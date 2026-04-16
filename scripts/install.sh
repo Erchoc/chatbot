@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # cb install script
-# Usage: curl -fsSL https://chatbox.longye.site/install.sh | bash
+# Usage: curl -fsSL https://chatbot.longye.site/install.sh | bash
 set -euo pipefail
 
-REPO="erchoc/chatbox"
+REPO="erchoc/chatbot"
 BIN_NAME="cb"
 INSTALL_DIR="$HOME/.local/bin"
 
@@ -14,11 +14,7 @@ ARCH=$(uname -m)
 
 case "$OS" in
   Darwin)
-    case "$ARCH" in
-      arm64)  ARTIFACT="cb-macos-arm64" ;;
-      x86_64) ARTIFACT="cb-macos-x86_64" ;;
-      *) echo "Unsupported macOS arch: $ARCH" >&2; exit 1 ;;
-    esac
+    ARTIFACT="cb-macos-universal"
     ;;
   Linux)
     case "$ARCH" in
