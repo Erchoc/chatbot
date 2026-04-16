@@ -98,15 +98,13 @@ jobs:
           name: cb-linux-x86_64
           path: cb-linux-x86_64
 
-  # ── Linux aarch64 (cross-compiled) ────────────────────────────────────────
+  # ── Linux aarch64 (native ARM runner) ──────────────────────────────────────
   build-linux-arm:
     name: Build Linux aarch64
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-unknown-linux-gnu
 
       - name: Cache cargo
         uses: actions/cache@v5
@@ -115,24 +113,19 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             packages/cli/target
-          key: linux-arm-cargo-${{ hashFiles('packages/cli/Cargo.lock') }}
-          restore-keys: linux-arm-cargo-
+          key: linux-arm-native-cargo-${{ hashFiles('packages/cli/Cargo.lock') }}
+          restore-keys: linux-arm-native-cargo-
 
-      - name: Install cross
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cross
+      - name: Install ALSA dev
+        run: sudo apt-get install -y libasound2-dev
 
       - name: Build
-        env:
-          CROSS_CONFIG: ${{ github.workspace }}/Cross.toml
-        run: |
-          echo "Using CROSS_CONFIG=${CROSS_CONFIG}"
-          test -f "${CROSS_CONFIG}"
-          cross build -vv --release --manifest-path packages/cli/Cargo.toml --target aarch64-unknown-linux-gnu
+        run: cargo build --release --manifest-path packages/cli/Cargo.toml
 
       - name: Package
-        run: cp packages/cli/target/aarch64-unknown-linux-gnu/release/cb cb-linux-arm64
+        run: |
+          cp packages/cli/target/release/cb cb-linux-arm64
+          strip cb-linux-arm64
 
       - uses: actions/upload-artifact@v6
         with:
