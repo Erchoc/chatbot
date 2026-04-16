@@ -124,7 +124,12 @@ jobs:
           tool: cross
 
       - name: Build
-        run: cross build -vv --release --manifest-path packages/cli/Cargo.toml --target aarch64-unknown-linux-gnu
+        env:
+          CROSS_CONFIG: ${{ github.workspace }}/Cross.toml
+        run: |
+          echo "Using CROSS_CONFIG=${CROSS_CONFIG}"
+          test -f "${CROSS_CONFIG}"
+          cross build -vv --release --manifest-path packages/cli/Cargo.toml --target aarch64-unknown-linux-gnu
 
       - name: Package
         run: cp packages/cli/target/aarch64-unknown-linux-gnu/release/cb cb-linux-arm64
