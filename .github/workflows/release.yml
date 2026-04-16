@@ -57,7 +57,7 @@ jobs:
           strip cb-macos-universal
           file cb-macos-universal
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: cb-macos-universal
           path: cb-macos-universal
@@ -93,7 +93,7 @@ jobs:
           cp packages/cli/target/x86_64-unknown-linux-gnu/release/cb cb-linux-x86_64
           strip cb-linux-x86_64
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: cb-linux-x86_64
           path: cb-linux-x86_64
@@ -124,12 +124,12 @@ jobs:
           tool: cross
 
       - name: Build
-        run: cross build --release --manifest-path packages/cli/Cargo.toml --target aarch64-unknown-linux-gnu
+        run: cross build -vv --release --manifest-path packages/cli/Cargo.toml --target aarch64-unknown-linux-gnu
 
       - name: Package
         run: cp packages/cli/target/aarch64-unknown-linux-gnu/release/cb cb-linux-arm64
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: cb-linux-arm64
           path: cb-linux-arm64
@@ -142,7 +142,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v6
         with:
           path: artifacts
 
@@ -175,7 +175,7 @@ jobs:
 
       - name: Upload dry-run bundle
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: release-dry-run-${{ steps.meta.outputs.tag }}
           path: artifacts
