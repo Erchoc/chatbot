@@ -21,7 +21,7 @@ jobs:
     with:
       tool:        cb
       release_tag: ${{ github.event.release.tag_name || inputs.release_tag }}
-      package_dir: npm
+      package_dir: packages/npm
       dry_run:     ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
     secrets:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

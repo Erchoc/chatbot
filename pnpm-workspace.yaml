@@ -1,5 +1,10 @@
 packages:
   - 'packages/*'
+  # packages/npm is a publish-only wrapper. Its package.json is generated
+  # at release time by the shared build script in Erchoc/homebrew-tap and
+  # never committed. Not a workspace member — exclude so pnpm install
+  # doesn't try to link it.
+  - '!packages/npm'
 
 onlyBuiltDependencies:
   - '@biomejs/biome'
