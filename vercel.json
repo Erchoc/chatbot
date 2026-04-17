@@ -1,6 +1,0 @@
-{
-  "buildCommand": "pnpm --filter @chatbot/web build",
-  "outputDirectory": "packages/web/dist",
-  "installCommand": "pnpm install --frozen-lockfile",
-  "framework": null
-}
