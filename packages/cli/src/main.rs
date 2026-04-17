@@ -35,6 +35,8 @@ enum Commands {
     Uninstall,
     /// Show daemon service status
     Status,
+    /// Update cb to latest version
+    Update,
     /// Open local web dashboard
     Open,
     /// View conversation event logs
@@ -85,6 +87,7 @@ async fn main() -> anyhow::Result<()> {
                 cmd::chat::run_text(&message.join(" "), cli.debug).await
             }
         }
+        Some(Commands::Update) => cmd::update::run().await,
         Some(Commands::Install) => cmd::install::run().await,
         Some(Commands::Uninstall) => cmd::install::uninstall().await,
         Some(Commands::Status) => cmd::install::status().await,
