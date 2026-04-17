@@ -15,7 +15,7 @@ cp "packages/cli/target/release/$BINARY" "$INSTALL_DIR/$BINARY"
 if [ "$(uname -s)" = "Darwin" ]; then
   ENTITLEMENTS="packages/cli/entitlements.plist"
   if [ -f "$ENTITLEMENTS" ]; then
-    codesign --force --options runtime \
+    codesign --force \
       --entitlements "$ENTITLEMENTS" \
       --sign - "$INSTALL_DIR/$BINARY" 2>/dev/null || true
   fi

@@ -112,12 +112,11 @@ fn ensure_codesign(cb_bin: &PathBuf) {
     }
 
     println!("  Signing binary with microphone entitlement...");
+    // NOTE: do NOT use --options runtime for ad-hoc signing.
+    // Hardened runtime is only needed for notarization with Developer ID.
+    // With ad-hoc sign it causes unwanted directory access prompts.
     let result = Command::new("codesign")
-        .args([
-            "--force",
-            "--options", "runtime",
-            "--entitlements",
-        ])
+        .args(["--force", "--entitlements"])
         .arg(&ent_path)
         .args(["--sign", "-"])
         .arg(cb_bin)
