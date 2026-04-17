@@ -58,7 +58,11 @@ pub async fn run() -> Result<()> {
         .await?;
 
     // ── Replace current binary ──────────────────────────────────────────────
-    let exe = std::env::current_exe().context("无法确定当前二进制路径")?;
+    // Resolve symlinks so we replace the real file, not a brew symlink
+    let exe = std::env::current_exe()
+        .context("无法确定当前二进制路径")?
+        .canonicalize()
+        .context("无法解析二进制真实路径")?;
     let tmp = exe.with_extension("tmp");
 
     std::fs::write(&tmp, &bytes).context("写入临时文件失败")?;
