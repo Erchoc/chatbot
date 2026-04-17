@@ -1,0 +1,27 @@
+name: publish npm
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Git tag of the release to publish from"
+        required: true
+        type: string
+      dry_run:
+        description: "If true, run npm publish --dry-run only"
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  npm:
+    uses: Erchoc/homebrew-tap/.github/workflows/publish-npm-reusable.yml@master
+    with:
+      tool:        cb
+      release_tag: ${{ github.event.release.tag_name || inputs.release_tag }}
+      package_dir: npm
+      dry_run:     ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

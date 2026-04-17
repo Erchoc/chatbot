@@ -1,0 +1,27 @@
+{
+  "name": "@erchoc/cb",
+  "version": "__VERSION__",
+  "description": "Cross-platform voice assistant that lives in your terminal",
+  "homepage": "https://github.com/Erchoc/chatbot",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Erchoc/chatbot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Erchoc/chatbot/issues"
+  },
+  "license": "MIT",
+  "author": "Erchoc",
+  "bin": {
+    "cb": "bin/cb.js"
+  },
+  "files": ["bin/", "README.md", "LICENSE"],
+  "os": ["darwin", "linux"],
+  "cpu": ["x64", "arm64"],
+  "engines": {
+    "node": ">=16"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

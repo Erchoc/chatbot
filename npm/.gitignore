@@ -1,0 +1,13 @@
+# Downloaded release binaries (written by CI, never committed)
+bin/*
+!bin/*.js
+!bin/.gitkeep
+
+# Generated manifest
+package.json
+
+# npm pack output
+*.tgz
+
+# Temp download staging (created by build-npm-package-from-release.mjs)
+.release-downloads/
