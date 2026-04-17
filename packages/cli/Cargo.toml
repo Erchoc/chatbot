@@ -44,6 +44,7 @@ ctrlc = "3.4"
 dotenvy = "0.15"
 crossterm = "0.28"
 pinyin = "0.10"
+libc = "0.2"
 
 [profile.release]
 opt-level = "z"

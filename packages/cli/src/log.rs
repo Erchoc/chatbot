@@ -26,11 +26,14 @@ const KEEP_RATIO: f64 = 0.70;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogEntry {
-    /// Unix milliseconds
+    /// Unix milliseconds — authoritative, tz-agnostic. Always render from
+    /// this via `millis_to_time(ts)` at display time; never trust `time`
+    /// for rendering (historical entries were stored in UTC).
     pub ts: u64,
-    /// Human-readable time "HH:MM:SS" (UTC)
+    /// Pre-formatted "HH:MM:SS" in the writer's local timezone at write time.
+    /// Kept for dashboard consumption; display code should recompute from `ts`.
     pub time: String,
-    /// ISO date string for grouping, e.g. "2026-04-16"
+    /// ISO date string used for file grouping, e.g. "2026-04-16".
     pub date: String,
     #[serde(flatten)]
     pub event: LogEvent,
@@ -330,19 +333,52 @@ pub fn now_millis() -> u64 {
         .as_millis() as u64
 }
 
-/// Convert unix milliseconds to "HH:MM:SS" in UTC.
-pub fn millis_to_time(ms: u64) -> String {
-    let secs = (ms / 1000) % 86400;
-    let h = secs / 3600;
-    let m = (secs % 3600) / 60;
-    let s = secs % 60;
-    format!("{h:02}:{m:02}:{s:02}")
+/// Break unix seconds into a local-time `struct tm` via `localtime_r(3)`.
+///
+/// Returns `None` if the platform's `localtime_r` fails (shouldn't happen
+/// on macOS/Linux for any reasonable time_t). Callers fall back to UTC.
+fn local_tm(secs: i64) -> Option<libc::tm> {
+    use std::mem::MaybeUninit;
+    let t: libc::time_t = secs as libc::time_t;
+    let mut tm = MaybeUninit::<libc::tm>::uninit();
+    let ok = unsafe { !libc::localtime_r(&t, tm.as_mut_ptr()).is_null() };
+    if ok {
+        Some(unsafe { tm.assume_init() })
+    } else {
+        None
+    }
 }
 
-/// Convert unix milliseconds to "YYYY-MM-DD" in UTC.
+/// Convert unix milliseconds to "HH:MM:SS" in the process's local timezone.
+///
+/// Falls back to UTC if the host can't resolve the local offset.
+pub fn millis_to_time(ms: u64) -> String {
+    let secs = (ms / 1000) as i64;
+    if let Some(tm) = local_tm(secs) {
+        return format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec);
+    }
+    // UTC fallback
+    let s = (ms / 1000) % 86400;
+    format!("{:02}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60)
+}
+
+/// Convert unix milliseconds to "YYYY-MM-DD" in the process's local timezone.
+///
+/// Files are grouped by this value, so rotation, file lookup, and the UI
+/// all share the same notion of "today" as the user's wall clock. Falls
+/// back to UTC if the host can't resolve the local offset.
 pub fn millis_to_date(ms: u64) -> String {
-    let secs = ms / 1000;
-    let days = secs / 86400;
+    let secs = (ms / 1000) as i64;
+    if let Some(tm) = local_tm(secs) {
+        return format!(
+            "{:04}-{:02}-{:02}",
+            tm.tm_year + 1900,
+            tm.tm_mon + 1,
+            tm.tm_mday
+        );
+    }
+    // UTC fallback
+    let days = (ms / 1000) / 86400;
     let (y, m, d) = epoch_days_to_ymd(days);
     format!("{y:04}-{m:02}-{d:02}")
 }

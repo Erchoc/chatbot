@@ -167,6 +167,22 @@ When wake word session is active, `threshold_scale = 0.8` (20% more sensitive).
 **Fix**: Save previous voice_type before changing. Only `Enter` (empty) confirms. `r` reverts and re-selects. ESC reverts and bails. Any other input also confirms (voice was already set correctly by selection).
 **Rule**: When a wizard step modifies config then asks for confirmation, ALWAYS save the old value first and restore it on cancel/failure. Never let a text prompt accidentally overwrite a structured field.
 
+### 16. launchd daemon silently stuck on "麦克风不可用" but `cb status` says running
+**Symptom**: User reports "daemon 听不到，不说话". `cb status` reports 后台服务运行中. But daemon stderr shows "Failed to get default microphone config" + "麦克风仍不可用" repeating every 60s for hours. No response to speech because no recording happens.
+**Root cause**: Two compounding factors:
+  1. Daemon binary was `/Users/longye/Desktop/cb-macos-universal` — a hand-downloaded old v0.1.0-beta artifact. It never went through `cb install`'s codesign + entitlement path, so it lacked `com.apple.security.device.audio-input`. TCC refused mic access. launchd has no UI to prompt — daemon just retries forever.
+  2. `cb status` only checked `launchctl list`, didn't read stderr. A daemon stuck in a retry loop looked "healthy" from status's view.
+**Fix**: 
+  - `cb status` now tails `cb.stderr.log` (macOS) or `journalctl` (linux), detects mic-failure patterns in the last 80 lines, warns in red with recovery hint.
+  - `cb install` now does a post-load smoke test: waits 3s, scans stderr for mic failures written after install started, rolls back plist + launchctl unload if found. Prevents leaving a broken daemon behind.
+**Rule**: Daemons have no interactive UI — every required permission must be triggered in the foreground install session, AND verified post-install. "Process is alive" is not "process is working" — status must read downstream signals (logs, event timestamps). Never trust launchctl/systemctl alone as proof of health.
+
+### 17. Log timestamps rendered in UTC made 10-minute-old events look like afternoon history
+**Symptom**: User says "我 10 分钟前触发的", logs display "16:00:31". In Shanghai (UTC+8) at local 00:10 AM, that UTC timestamp IS 10 minutes ago — but it reads as "4 PM" which feels like afternoon. This led to misdiagnosing the state of the daemon (is it really stuck now? or was that hours ago?).
+**Root cause**: `millis_to_time()` and `millis_to_date()` in `log.rs` formatted UTC wall clock. Logs stored UTC strings; `cb logs` displayed them as-is.
+**Fix**: Both helpers now use `libc::localtime_r` to render in the process's local timezone; fallback to UTC if the host can't resolve the offset. `cb logs` recomputes time from `entry.ts` at display time (not the stored `entry.time` string) so historical UTC-written entries also render in local time.
+**Rule**: Timestamps persisted to disk should always be tz-agnostic (unix ms). Human-facing strings should always be rendered in the viewer's local timezone at display time, not baked at write time. Never show UTC to an end user unless the UI explicitly labels it.
+
 ## Rules
 
 - **Breaking changes after v1.0.0**: Any change that alters user-facing behavior, config format, file paths, or CLI interface must be confirmed with the user before proceeding.
@@ -200,3 +216,6 @@ When wake word session is active, `threshold_scale = 0.8` (20% more sensitive).
 - [x] Color system with NO_COLOR / TTY detection
 - [x] Config path unified to `~/.config/chatbot/` with auto-migration
 - [x] Passive update notifier (daily background check, minor-version bumps only)
+- [x] `cb status` surfaces daemon mic-failure retry loop (reads stderr/journald)
+- [x] `cb install` post-load smoke test rolls back broken installs
+- [x] Logs render in local timezone (was UTC, confused users about event recency)

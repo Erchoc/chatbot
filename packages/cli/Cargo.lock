@@ -257,6 +257,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "hound",
+ "libc",
  "pinyin",
  "reqwest",
  "rodio",

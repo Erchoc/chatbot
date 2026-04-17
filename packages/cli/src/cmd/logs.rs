@@ -54,7 +54,10 @@ pub async fn run(follow: bool, date: Option<String>) -> Result<()> {
 }
 
 fn print_entry(entry: &log::LogEntry) {
-    let time = &entry.time;
+    // Always recompute from the unix-ms ts so historical entries written
+    // in UTC render in the user's local timezone along with new ones.
+    let time = log::millis_to_time(entry.ts);
+    let time = &time;
     match &entry.event {
         LogEvent::SessionStart {
             session_id,

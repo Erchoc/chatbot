@@ -294,6 +294,64 @@ fn install_launchd(cb_bin: &PathBuf) -> Result<()> {
 
     println!("  Service loaded and started");
     println!("  Logs: {}", log_dir.display());
+
+    // Post-install smoke test: the foreground mic check can pass while
+    // the launchd-scoped execution of the same binary still fails (happened
+    // with a pre-entitlement ad-hoc signed binary downloaded to Desktop).
+    // Watch stderr for ~3s; if record failures appear, unload + clean up.
+    verify_daemon_healthy(&plist_path, &stderr_log)?;
+
+    Ok(())
+}
+
+/// Wait briefly for the daemon's first loop iteration and confirm it isn't
+/// already stuck in a mic-retry cycle. If it is, roll back the install
+/// (unload + delete plist) and report the error with fix-it hints — far
+/// better than leaving the user with a daemon that claims "running" but
+/// never responds.
+fn verify_daemon_healthy(plist_path: &PathBuf, stderr_log: &PathBuf) -> Result<()> {
+    use std::time::{Duration, Instant};
+
+    // Remember the stderr file's baseline size so we only examine NEW lines
+    // written since this install started. This avoids false positives from
+    // a previous install's stale errors still at the top of the file.
+    let baseline_len = std::fs::metadata(stderr_log).map(|m| m.len()).unwrap_or(0);
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut last_checked_tail: Vec<String>;
+    while Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(500));
+        if let Ok(content) = std::fs::read(stderr_log) {
+            let fresh = &content[(baseline_len as usize).min(content.len())..];
+            let text = String::from_utf8_lossy(fresh);
+            last_checked_tail = text.lines().map(|s| s.to_string()).collect();
+            let tail_refs: Vec<&str> = last_checked_tail.iter().map(|s| s.as_str()).collect();
+            let (mic_count, _) = scan_lines_for_mic_failure(&tail_refs);
+            if mic_count >= 2 {
+                // Roll back before bailing so the user isn't left with a
+                // half-broken install + a false-positive `cb status`.
+                let _ = Command::new("launchctl")
+                    .args(["unload", &plist_path.to_string_lossy()])
+                    .output();
+                let _ = std::fs::remove_file(plist_path);
+                anyhow::bail!(
+                    "Daemon started but mic is unavailable under launchd.\n\
+                     前台权限通过不等于 launchd 上下文能拿到麦克风。\n\
+                     已回滚安装。\n\
+                     \n\
+                     修复步骤:\n\
+                       1. 系统设置 → 隐私与安全性 → 麦克风: 删除任何已有的 cb / Desktop 条目\n\
+                       2. 删掉其他位置可能遗留的老 cb 二进制 (特别是 Desktop、Downloads)\n\
+                       3. 重新 `cb install`，允许新弹出的权限对话框\n\
+                     \n\
+                     守护进程 stderr 最后几行:\n{}",
+                    last_checked_tail.iter().rev().take(5).rev().cloned()
+                        .collect::<Vec<_>>().join("\n")
+                );
+            }
+        }
+    }
+    println!("  \x1b[92m✓\x1b[0m Smoke test passed (3s, no mic errors).");
     Ok(())
 }
 
@@ -357,6 +415,20 @@ fn status_launchd() -> Result<()> {
         let log_dir = launchd_log_dir();
         println!("     日志目录: {}", log_dir.display());
         println!("     配置文件: {}", plist_path.display());
+
+        // Surface obvious failure modes that leave the daemon "running"
+        // but not actually working (most commonly: no mic permission).
+        let stderr_path = log_dir.join("cb.stderr.log");
+        let warnings = detect_daemon_health_issues(&stderr_path);
+        if !warnings.is_empty() {
+            println!();
+            println!("  \x1b[91m⚠  健康检查\x1b[0m");
+            for w in &warnings {
+                println!("     \x1b[91m{w}\x1b[0m");
+            }
+            print_mic_recovery_hint();
+        }
+
         println!();
         println!("     \x1b[90m停止服务: cb uninstall\x1b[0m");
         println!("     \x1b[90m查看日志: cb logs -f\x1b[0m");
@@ -489,6 +561,18 @@ fn status_systemd() -> Result<()> {
     if state == "active" {
         println!("  \x1b[92m●\x1b[0m  后台服务运行中");
         println!("     配置文件: {}", service_path.display());
+
+        // Ask journald for the last 80 lines; sniff for mic failure loop.
+        let warnings = detect_systemd_health_issues();
+        if !warnings.is_empty() {
+            println!();
+            println!("  \x1b[91m⚠  健康检查\x1b[0m");
+            for w in &warnings {
+                println!("     \x1b[91m{w}\x1b[0m");
+            }
+            print_mic_recovery_hint();
+        }
+
         println!();
         println!("     \x1b[90m查看日志: journalctl --user -u chatbot -f\x1b[0m");
         println!("     \x1b[90m停止服务: cb uninstall\x1b[0m");
@@ -505,6 +589,138 @@ fn status_systemd() -> Result<()> {
         println!("     \x1b[90m前台运行:   cb\x1b[0m");
     }
     Ok(())
+}
+
+// ── Daemon health diagnostics ────────────────────────────────────────────
+//
+// A "running" daemon can still be useless if it can't acquire the mic (TCC
+// not granted for the binary, device unplugged, etc). The daemon retries
+// forever and writes to stderr, but `launchctl list` / `systemctl is-active`
+// both keep saying "running". These helpers read recent daemon output and
+// flag the common silent-failure modes.
+
+const MIC_FAILURE_PATTERNS: &[&str] = &[
+    "Failed to get default microphone config",
+    "录音失败",
+    "麦克风仍不可用",
+    "麦克风断开",
+    "mic disconnected",
+    "mic calibration failed",
+];
+
+/// Count how many of the last `max_lines` in `path` match a mic-failure
+/// pattern, and whether the most recent line is one.
+fn scan_lines_for_mic_failure(lines: &[&str]) -> (usize, bool) {
+    let count = lines
+        .iter()
+        .filter(|l| MIC_FAILURE_PATTERNS.iter().any(|p| l.contains(p)))
+        .count();
+    let last_is_failure = lines
+        .last()
+        .map(|l| MIC_FAILURE_PATTERNS.iter().any(|p| l.contains(p)))
+        .unwrap_or(false);
+    (count, last_is_failure)
+}
+
+fn detect_daemon_health_issues(stderr_path: &PathBuf) -> Vec<String> {
+    let content = match std::fs::read_to_string(stderr_path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    let lines: Vec<&str> = content.lines().collect();
+    let tail_len = lines.len().min(80);
+    let tail: Vec<&str> = lines[lines.len() - tail_len..].to_vec();
+    build_health_warnings(&tail)
+}
+
+fn detect_systemd_health_issues() -> Vec<String> {
+    let output = Command::new("journalctl")
+        .args([
+            "--user",
+            "-u",
+            "chatbot.service",
+            "-n",
+            "80",
+            "--no-pager",
+            "-o",
+            "cat",
+        ])
+        .output();
+    let content = match output {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+        _ => return Vec::new(),
+    };
+    let tail: Vec<&str> = content.lines().collect();
+    build_health_warnings(&tail)
+}
+
+fn build_health_warnings(tail: &[&str]) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let (mic_count, mic_last) = scan_lines_for_mic_failure(tail);
+    if mic_count >= 3 && mic_last {
+        warnings.push(format!(
+            "麦克风持续不可用（最近 {} 行中有 {} 条录音失败日志）",
+            tail.len(),
+            mic_count
+        ));
+    } else if mic_count >= 3 {
+        warnings.push(format!(
+            "最近有 {} 条录音失败日志（可能已恢复，但建议检查）",
+            mic_count
+        ));
+    }
+    warnings
+}
+
+fn print_mic_recovery_hint() {
+    println!();
+    println!("     \x1b[90m修复步骤:\x1b[0m");
+    println!("     \x1b[90m  1. 系统设置 → 隐私与安全性 → 麦克风 → 确认 cb 已勾选\x1b[0m");
+    println!("     \x1b[90m  2. 若无 cb 条目: 前台跑一次 `cb chat 你好` 触发授权弹窗\x1b[0m");
+    println!("     \x1b[90m  3. 重装守护进程:  cb uninstall && cb install\x1b[0m");
+}
+
+#[cfg(test)]
+mod health_tests {
+    use super::*;
+
+    #[test]
+    fn mic_failure_detected_when_tail_shows_retry_loop() {
+        let lines = vec![
+            "   录音失败: Failed to get default microphone config",
+            "   麦克风仍不可用，每 60 秒自动检测，连接后自动恢复...",
+            "   录音失败: Failed to get default microphone config",
+            "   麦克风仍不可用，每 60 秒自动检测，连接后自动恢复...",
+            "   录音失败: Failed to get default microphone config",
+        ];
+        let (count, last) = scan_lines_for_mic_failure(&lines);
+        assert_eq!(count, 5);
+        assert!(last);
+        assert!(!build_health_warnings(&lines).is_empty());
+    }
+
+    #[test]
+    fn clean_log_produces_no_warning() {
+        let lines = vec!["   ● session start s123", "   ✓ LLM OK", "   ✓ 语音 API OK"];
+        let (count, _) = scan_lines_for_mic_failure(&lines);
+        assert_eq!(count, 0);
+        assert!(build_health_warnings(&lines).is_empty());
+    }
+
+    #[test]
+    fn past_failure_flagged_softly_when_recovered() {
+        // Three old failures, but the latest line is success — warn
+        // softly ("may have recovered") rather than the red-alert variant.
+        let mut lines = vec![
+            "   录音失败: Failed to get default microphone config",
+            "   录音失败: Failed to get default microphone config",
+            "   录音失败: Failed to get default microphone config",
+        ];
+        lines.push("   ● session start s999");
+        let warnings = build_health_warnings(&lines);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("可能已恢复"));
+    }
 }
 
 fn run_cmd(cmd: &str, args: &[&str]) -> Result<()> {
