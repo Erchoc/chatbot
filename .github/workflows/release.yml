@@ -189,6 +189,9 @@ jobs:
     name: Package / Release
     needs: [build-macos, build-linux-x86, build-linux-arm]
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      should_publish: ${{ steps.meta.outputs.should_publish }}
     steps:
       - uses: actions/checkout@v6
 
@@ -209,13 +212,17 @@ jobs:
         run: |
           if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
             tag="${GITHUB_REF_NAME}"
+            should_publish=true
           elif [[ -n "${{ inputs.tag_name }}" ]]; then
             tag="${{ inputs.tag_name }}"
+            should_publish=${{ !inputs.dry_run }}
           else
             tag="manual-${GITHUB_RUN_NUMBER}"
+            should_publish=${{ !inputs.dry_run }}
           fi
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          echo "resolved tag: ${tag}"
+          echo "should_publish=${should_publish}" >> "$GITHUB_OUTPUT"
+          echo "resolved tag: ${tag} (publish: ${should_publish})"
 
       - name: Dry-run summary
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
@@ -231,12 +238,15 @@ jobs:
           path: artifacts
 
       - name: Create release
-        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run) }}
+        if: ${{ steps.meta.outputs.should_publish == 'true' }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: ${{ steps.meta.outputs.tag }}
           generate_release_notes: true
+          # Mark pre-release when the tag carries a semver pre-release suffix
+          # (anything after a hyphen: -beta, -rc, -alpha, -manual, …).
+          prerelease: ${{ contains(steps.meta.outputs.tag, '-') }}
           files: |
             artifacts/cb-macos-universal/cb-macos-universal
             artifacts/cb-macos-universal/cb-macos-universal.sha256
@@ -244,3 +254,19 @@ jobs:
             artifacts/cb-linux-x86_64/cb-linux-x86_64.sha256
             artifacts/cb-linux-arm64/cb-linux-arm64
             artifacts/cb-linux-arm64/cb-linux-arm64.sha256
+
+  # ── npm publish (chained from release job — GITHUB_TOKEN-created releases
+  #    don't trigger `on: release:` workflows, so we call the reusable
+  #    workflow directly here). ────────────────────────────────────────────
+  publish-npm:
+    name: Publish to npm
+    needs: release
+    if: ${{ needs.release.outputs.should_publish == 'true' }}
+    uses: Erchoc/homebrew-tap/.github/workflows/publish-npm-reusable.yml@master
+    with:
+      tool:        cb
+      release_tag: ${{ needs.release.outputs.tag }}
+      package_dir: packages/npm
+      dry_run:     false
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
