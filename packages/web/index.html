@@ -199,21 +199,39 @@
       font-size: 0.9rem;
       color: var(--text-secondary);
       cursor: pointer;
-      transition: border-color 0.2s;
+      transition: border-color 0.2s, background 0.2s;
+      user-select: none;
     }
 
     .install-cmd code:hover {
       border-color: var(--border-hover);
     }
 
+    .install-cmd code.copied {
+      border-color: var(--accent-3);
+      background: rgba(34, 197, 94, 0.08);
+    }
+
     .install-cmd code .prompt { color: var(--accent); }
+    .install-cmd code .cmd-text { user-select: text; }
 
     .install-cmd code .copy-icon {
-      opacity: 0.4;
-      transition: opacity 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      opacity: 0.5;
+      transition: opacity 0.2s, color 0.2s;
+      font-size: 0.8rem;
     }
 
     .install-cmd code:hover .copy-icon { opacity: 1; }
+    .install-cmd code.copied .copy-icon { opacity: 1; color: var(--accent-3); }
+
+    .install-hint {
+      margin-top: 0.75rem;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
 
     /* ===== Terminal Demo ===== */
     .terminal-section {
@@ -263,11 +281,16 @@
       padding: 1.5rem;
       font-family: var(--font-mono);
       font-size: 0.85rem;
-      line-height: 1.8;
+      line-height: 1.6;
       min-height: 320px;
+      white-space: pre;
+      overflow-x: auto;
     }
 
-    .terminal-body .line { margin-bottom: 0.25rem; }
+    .terminal-body .line {
+      white-space: pre;
+      min-height: 1.6em;
+    }
     .terminal-body .cyan { color: #22d3ee; }
     .terminal-body .green { color: #4ade80; }
     .terminal-body .purple { color: #c084fc; }
@@ -665,10 +688,15 @@
       <a href="#install" class="btn btn-secondary">Get Started</a>
     </div>
     <div class="install-cmd" id="install">
-      <code onclick="navigator.clipboard.writeText('brew install erchoc/tap/chatbot')">
-        <span class="prompt">$</span> brew install erchoc/tap/chatbot
-        <span class="copy-icon">📋</span>
+      <code id="install-cmd" data-cmd="brew install erchoc/tap/chatbot" onclick="copyInstallCmd(this)" title="Click to copy">
+        <span class="prompt">$</span>
+        <span class="cmd-text">brew install erchoc/tap/chatbot</span>
+        <span class="copy-icon" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M10 5V3a1 1 0 00-1-1H3a1 1 0 00-1 1v6a1 1 0 001 1h2"/></svg>
+          <span class="copy-label">Copy</span>
+        </span>
       </code>
+      <div class="install-hint">或 <code style="font-size:0.8rem;padding:0.15rem 0.4rem;background:var(--bg-subtle);border:1px solid var(--border);border-radius:4px;">npm i -g @erchoc/chatbot</code> · <code style="font-size:0.8rem;padding:0.15rem 0.4rem;background:var(--bg-subtle);border:1px solid var(--border);border-radius:4px;">curl -fsSL https://chatbot.longye.site/install.sh | bash</code></div>
     </div>
   </section>
 
@@ -813,51 +841,112 @@
     </p>
   </footer>
 
+  <!-- Copy to clipboard -->
+  <script>
+    function copyInstallCmd(el) {
+      const cmd = el.dataset.cmd;
+      const label = el.querySelector('.copy-label');
+      const original = label ? label.textContent : '';
+
+      const markCopied = () => {
+        el.classList.add('copied');
+        if (label) label.textContent = 'Copied!';
+        setTimeout(() => {
+          el.classList.remove('copied');
+          if (label) label.textContent = original;
+        }, 1600);
+      };
+
+      // Prefer async clipboard API (requires secure context)
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(cmd).then(markCopied).catch(() => fallbackCopy(cmd, markCopied));
+      } else {
+        fallbackCopy(cmd, markCopied);
+      }
+    }
+
+    function fallbackCopy(text, onDone) {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand('copy');
+        onDone();
+      } catch (_) {
+        // Last resort: alert so the user can copy manually
+        window.prompt('Copy the command:', text);
+      } finally {
+        document.body.removeChild(ta);
+      }
+    }
+  </script>
+
   <!-- Terminal Animation Script -->
   <script>
     const lines = [
-      { text: '', delay: 300 },
-      { text: '  <span class="cyan">██████╗</span><span class="purple">██████╗</span>', delay: 80 },
-      { text: '  <span class="cyan">██╔════╝</span><span class="purple">██╔══██╗</span>', delay: 80 },
-      { text: '  <span class="cyan">██║     </span><span class="purple">██████╔╝</span>   <span class="white">Chatbox Voice Assistant</span>', delay: 80 },
-      { text: '  <span class="cyan">██║     </span><span class="purple">██╔══██╗</span>   <span class="dim">v0.1.0</span>', delay: 80 },
-      { text: '  <span class="cyan">╚██████╗</span><span class="purple">██████╔╝</span>', delay: 80 },
-      { text: '  <span class="cyan"> ╚═════╝</span><span class="purple">╚═════╝</span>', delay: 80 },
-      { text: '', delay: 400 },
-      { text: '  <span class="green">✓</span> LLM (deepseek-chat) <span class="green">OK</span>', delay: 500 },
-      { text: '  <span class="green">✓</span> Speech API <span class="green">OK</span>', delay: 400 },
-      { text: '  <span class="green">✓</span> Calibrating noise... <span class="dim">noise:0.0004 threshold:0.018</span>', delay: 600 },
-      { text: '', delay: 200 },
-      { text: '  <span class="cyan">╭───────────────────────────────────╮</span>', delay: 100 },
-      { text: '  <span class="cyan">│</span>  <span class="white">Voice assistant ready</span>              <span class="cyan">│</span>', delay: 100 },
-      { text: '  <span class="cyan">│</span>  <span class="white">Speak to start a conversation</span>     <span class="cyan">│</span>', delay: 100 },
-      { text: '  <span class="cyan">╰───────────────────────────────────╯</span>', delay: 400 },
-      { text: '', delay: 300 },
-      { text: '  <span class="dim">─────────────────────────────────────</span>', delay: 200 },
-      { text: '  <span class="cyan">🎤 Listening...</span>', delay: 1200 },
-      { text: '  <span class="green">🟢 Speech detected...</span>', delay: 800 },
-      { text: '', delay: 200 },
-      { text: '  <span class="cyan">🗣 You:</span> <span class="white">What can you do?</span>', delay: 600 },
-      { text: '  <span class="green">🤖 Assistant:</span> <span class="white">I can answer questions, have conversations, and help with tasks — all through voice!</span>', delay: 40, typewriter: true },
-      { text: '  <span class="dim">STT 0.5s | TTFT 0.2s | 28tok 187tok/s | TTS 0.8s | E2E 1.8s</span>', delay: 0 },
+      { text: '<span class="purple">❯</span> <span class="white">cb</span>', delay: 400 },
+      { text: '   <span class="cyan">██████╗</span><span class="purple">██████╗</span>', delay: 60 },
+      { text: '   <span class="cyan">██╔════╝</span><span class="purple">██╔══██╗</span>', delay: 60 },
+      { text: '   <span class="cyan">██║     </span><span class="purple">██████╔╝</span>   <b class="white">Chatbox Voice Assistant</b>', delay: 60 },
+      { text: '   <span class="cyan">██║     </span><span class="purple">██╔══██╗</span>   <span class="dim">v0.2.0</span>', delay: 60 },
+      { text: '   <span class="cyan">╚██████╗</span><span class="purple">██████╔╝</span>', delay: 60 },
+      { text: '   <span class="cyan"> ╚═════╝</span><span class="purple">╚═════╝</span>', delay: 300 },
+      { text: '', delay: 120 },
+      { text: '   <span class="cyan">╭───────────╮</span>', delay: 50 },
+      { text: '   <span class="cyan">│</span> <span class="cyan">◉</span>     <span class="cyan">◉</span> <span class="cyan">│</span>', delay: 50 },
+      { text: '   <span class="cyan">│</span>    <span class="green">▽</span>    <span class="cyan">│</span>', delay: 50 },
+      { text: '   <span class="cyan">╰───────────╯</span>', delay: 400 },
+      { text: '   <span class="green">✓</span> <b class="white">LLM</b> (deepseek-chat) <span class="green">OK</span>', delay: 500 },
+      { text: '   <span class="green">✓</span> <b class="white">语音 API</b> (STT: volc.bigasr.sauc.duration, TTS: BV409_streaming) <span class="green">OK</span>', delay: 500 },
+      { text: '   <span class="cyan">⠴</span> <b class="white">校准环境噪音...</b>   <span class="dim">noise:0.0036 threshold:0.0179Hz 1ch)</span>', delay: 900, replaceNext: true },
+      { text: '   <span class="green">✓</span> <b class="white">校准环境噪音...</b> <span class="dim">(noise:0.0030 threshold:0.0179)</span>', delay: 400 },
+      { text: '', delay: 120 },
+      { text: '   <span class="cyan">╭───────────────────────────────────╮</span>', delay: 60 },
+      { text: '   <span class="cyan">│</span>  <b class="white">语音助手已就绪</b>                   <span class="cyan">│</span>', delay: 60 },
+      { text: '   <span class="cyan">│</span>  <b class="white">说话即可对话</b>                     <span class="cyan">│</span>', delay: 60 },
+      { text: '   <span class="cyan">│</span>  <b class="white">Ctrl+C 退出</b>                      <span class="cyan">│</span>', delay: 60 },
+      { text: '   <span class="cyan">╰───────────────────────────────────╯</span>', delay: 300 },
+      { text: '', delay: 120 },
+      { text: '   <span class="dim">─────────────────────────────────────</span>', delay: 200 },
+      { text: '', delay: 120 },
+      { text: '  <span class="cyan">🎤 说话吧...</span>', delay: 1200 },
+      { text: '  <span class="green">🟢 检测到语音...</span>', delay: 700 },
+      { text: '   <span class="dim">ASR: 你能做什么</span>', delay: 400 },
+      { text: '', delay: 150 },
+      { text: '   <span class="cyan">🗣 你:</span> <span class="white">你能做什么</span>', delay: 500 },
+      { text: '   <span class="green">🤖 助手:</span> <span class="white">我可以回答问题、陪你聊天、帮你处理任务——都用语音完成！</span>', delay: 25, typewriter: true },
+      { text: '   <span class="dim">STT 0.5s | TTFT 0.2s | 28tok 187tok/s | TTS 0.8s | E2E 1.8s</span>', delay: 0 },
     ];
 
     const terminal = document.getElementById('terminal-demo');
     let lineIndex = 0;
+    let pendingReplace = null; // element that the next line should overwrite
 
     function addLine() {
       if (lineIndex >= lines.length) {
         // Add blinking cursor at the end
         const cursor = document.createElement('div');
         cursor.classList.add('line');
-        cursor.innerHTML = '  <span class="cursor-blink"></span>';
+        cursor.innerHTML = '   <span class="cursor-blink"></span>';
         terminal.appendChild(cursor);
         return;
       }
 
-      const { text, delay, typewriter } = lines[lineIndex];
-      const div = document.createElement('div');
-      div.classList.add('line');
+      const { text, delay, typewriter, replaceNext } = lines[lineIndex];
+
+      // If the previous step set pendingReplace, overwrite that element instead of appending
+      let div;
+      if (pendingReplace) {
+        div = pendingReplace;
+        pendingReplace = null;
+      } else {
+        div = document.createElement('div');
+        div.classList.add('line');
+      }
 
       if (typewriter && text) {
         // Typewriter: extract the actual text content and animate it
@@ -903,8 +992,9 @@
       }
 
       div.innerHTML = text;
-      terminal.appendChild(div);
+      if (!div.parentNode) terminal.appendChild(div);
       terminal.scrollTop = terminal.scrollHeight;
+      if (replaceNext) pendingReplace = div;
       lineIndex++;
       setTimeout(addLine, delay);
     }

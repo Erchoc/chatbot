@@ -1,13 +1,13 @@
-# @erchoc/cb
+# @erchoc/chatbot
 
 Cross-platform voice assistant that lives in your terminal.
 
 ```bash
-npm install -g @erchoc/cb
+npm install -g @erchoc/chatbot
 cb --version
 ```
 
-Equivalent to `brew install erchoc/tap/cb`. Both channels ship the same
+Equivalent to `brew install erchoc/tap/chatbot`. Both channels ship the same
 binary from the [Erchoc/chatbot](https://github.com/Erchoc/chatbot) GitHub
 Release.
 
