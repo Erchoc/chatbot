@@ -21,8 +21,25 @@ pub async fn run() -> Result<()> {
         anyhow::bail!("Unsupported platform. Only macOS and Linux are supported.");
     }
 
-    println!("  Daemon installed and started successfully.");
-    println!("  Use `cb uninstall` to remove.");
+    // Show post-install summary with usage info
+    let cfg = crate::config::AppConfig::load().unwrap_or_default();
+    let wake_enabled = cfg.persona.wake_word.enabled;
+    let wake_word = &cfg.persona.wake_word.word;
+
+    println!();
+    println!("  \x1b[92m✓\x1b[0m  后台服务已启动");
+    println!();
+    if wake_enabled {
+        println!("  \x1b[1m使用方式:\x1b[0m  说「{wake_word}」+ 你的问题");
+        println!("  \x1b[90m示例: \"{wake_word}，今天天气怎么样\"\x1b[0m");
+    } else {
+        println!("  \x1b[1m使用方式:\x1b[0m  直接说话即可对话");
+    }
+    println!();
+    println!("  \x1b[90m查看状态:  cb status\x1b[0m");
+    println!("  \x1b[90m查看日志:  cb logs -f\x1b[0m");
+    println!("  \x1b[90m停止服务:  cb uninstall\x1b[0m");
+    println!();
     Ok(())
 }
 
