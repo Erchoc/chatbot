@@ -14,6 +14,7 @@ use crate::ui::theme::*;
 pub async fn run_voice(debug: bool) -> Result<()> {
     let cfg = AppConfig::load()?;
     let cfg = ensure_config(cfg)?;
+    crate::update_check::spawn_background_check();
     let mut pipeline = VoicePipeline::new(cfg, debug)?;
     pipeline.run_loop().await
 }
@@ -22,6 +23,7 @@ pub async fn run_voice(debug: bool) -> Result<()> {
 pub async fn run_text(message: &str, _debug: bool) -> Result<()> {
     let cfg = AppConfig::load()?;
     let cfg = ensure_config(cfg)?;
+    crate::update_check::spawn_background_check();
 
     let llm_config = cfg
         .active_llm_config()
@@ -65,6 +67,10 @@ pub async fn run_text(message: &str, _debug: bool) -> Result<()> {
         },
         result.total_ms / 1000.0,
     );
+
+    if let Some(v) = crate::update_check::pending_notice() {
+        println!("   {BR_CYAN}⬆  发现新版本 v{v}，运行 {BOLD}cb update{RESET}{BR_CYAN} 升级{RESET}");
+    }
 
     Ok(())
 }

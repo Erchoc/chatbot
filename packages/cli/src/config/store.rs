@@ -20,6 +20,10 @@ pub fn config_path_display() -> String {
     "~/.config/chatbot/config.toml".to_string()
 }
 
+pub fn cache_path(name: &str) -> PathBuf {
+    config_dir().join(name)
+}
+
 fn migrate_from_dir(old_dir: &PathBuf, new_path: &PathBuf) -> bool {
     let old_path = old_dir.join("config.toml");
     if !old_path.exists() {

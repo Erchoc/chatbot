@@ -199,3 +199,4 @@ When wake word session is active, `threshold_scale = 0.8` (20% more sensitive).
 - [x] Release workflow (macOS universal + Linux x86/arm)
 - [x] Color system with NO_COLOR / TTY detection
 - [x] Config path unified to `~/.config/chatbot/` with auto-migration
+- [x] Passive update notifier (daily background check, minor-version bumps only)

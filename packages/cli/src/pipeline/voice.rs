@@ -239,6 +239,12 @@ impl VoicePipeline {
         // Ready banner
         banner::print_ready(&[m.ready_banner[0], m.ready_banner[1], m.ready_banner[2]]);
 
+        if let Some(v) = crate::update_check::pending_notice() {
+            println!(
+                "   {BR_CYAN}⬆  发现新版本 v{v}，运行 {BOLD}cb update{RESET}{BR_CYAN} 升级{RESET}\n"
+            );
+        }
+
         // Ctrl+C handler
         let running = Arc::new(AtomicBool::new(true));
         let r = running.clone();

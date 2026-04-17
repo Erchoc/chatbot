@@ -2,29 +2,14 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 
-const REPO: &str = "erchoc/chatbot";
+use crate::update_check::{fetch_latest_tag, REPO};
 
 pub async fn run() -> Result<()> {
     let current = env!("CARGO_PKG_VERSION");
     println!("  当前版本: v{current}");
 
-    // ── Fetch latest release tag ────────────────────────────────────────────
     println!("  检查新版本...");
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()?;
-
-    let resp: serde_json::Value = client
-        .get(format!("https://api.github.com/repos/{REPO}/releases/latest"))
-        .header("User-Agent", "cb-updater")
-        .send()
-        .await?
-        .json()
-        .await?;
-
-    let latest_tag = resp["tag_name"]
-        .as_str()
-        .context("无法获取最新版本号")?;
+    let latest_tag = fetch_latest_tag().await?;
     let latest = latest_tag.trim_start_matches('v');
 
     if latest == current {
@@ -48,6 +33,9 @@ pub async fn run() -> Result<()> {
 
     // ── Download ────────────────────────────────────────────────────────────
     println!("  下载 {artifact}...");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()?;
     let bytes = client
         .get(&url)
         .send()

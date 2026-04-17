@@ -8,6 +8,7 @@ mod llm;
 mod pipeline;
 mod speech;
 pub mod ui;
+mod update_check;
 
 use clap::{Parser, Subcommand};
 
