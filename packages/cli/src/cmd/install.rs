@@ -68,6 +68,18 @@ pub async fn status() -> Result<()> {
     } else {
         anyhow::bail!("Unsupported platform.");
     }
+
+    // Daemon-only users never see the in-loop update banner (it goes to a
+    // log file). `cb status` is their main touchpoint, so surface the notice
+    // here too.
+    if let Some(v) = crate::update_check::pending_notice() {
+        let hint = crate::update_check::upgrade_hint();
+        println!();
+        println!(
+            "  \x1b[96m⬆  发现新版本 v{v}，运行 \x1b[1m{hint}\x1b[0m\x1b[96m 升级\x1b[0m"
+        );
+    }
+
     Ok(())
 }
 

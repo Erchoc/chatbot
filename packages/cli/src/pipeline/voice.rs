@@ -240,9 +240,15 @@ impl VoicePipeline {
         banner::print_ready(&[m.ready_banner[0], m.ready_banner[1], m.ready_banner[2]]);
 
         if let Some(v) = crate::update_check::pending_notice() {
+            let hint = crate::update_check::upgrade_hint();
             println!(
-                "   {BR_CYAN}⬆  发现新版本 v{v}，运行 {BOLD}cb update{RESET}{BR_CYAN} 升级{RESET}\n"
+                "   {BR_CYAN}⬆  发现新版本 v{v}，运行 {BOLD}{hint}{RESET}{BR_CYAN} 升级{RESET}\n"
             );
+            // Daemon stdout is redirected to a log file, so this banner is
+            // invisible to a user who isn't tailing logs. Fire an OS-level
+            // desktop notification too so backgrounded-daemon users actually
+            // find out a new version exists.
+            crate::update_check::notify_desktop(&v, &hint);
         }
 
         // Ctrl+C handler
@@ -265,6 +271,13 @@ impl VoicePipeline {
             if !running.load(Ordering::Relaxed) {
                 break;
             }
+
+            // A backgrounded daemon can run for weeks — if we only check for
+            // new versions at boot, the user never learns about updates until
+            // they restart. spawn_background_check is self-throttled (24h
+            // cache guard inside), so calling it every turn is cheap: 99%
+            // of turns are an instant no-op.
+            crate::update_check::spawn_background_check();
 
             banner::separator();
 

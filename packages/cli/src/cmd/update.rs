@@ -2,7 +2,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 
-use crate::update_check::{fetch_latest_tag, REPO};
+use crate::update_check::{fetch_latest_tag, Channel, REPO, detect_channel};
 
 pub async fn run() -> Result<()> {
     let current = env!("CARGO_PKG_VERSION");
@@ -18,6 +18,28 @@ pub async fn run() -> Result<()> {
     }
 
     println!("  发现新版本: v{current} → {latest_tag}");
+
+    // `cb update` self-replaces the binary. That's fine for curl users, but
+    // for brew/npm it would silently desync their package manager's view of
+    // the installed version. Redirect to the right command instead.
+    match detect_channel() {
+        Channel::Brew => {
+            println!(
+                "  \x1b[33m⚠\x1b[0m  检测到通过 Homebrew 安装 —— \
+                 请用 \x1b[1mbrew upgrade erchoc/tap/cb\x1b[0m 升级"
+            );
+            println!("     （`cb update` 会绕过 brew 的版本记录，导致 `brew info` 与实际不符）");
+            return Ok(());
+        }
+        Channel::Npm => {
+            println!(
+                "  \x1b[33m⚠\x1b[0m  检测到通过 npm 安装 —— \
+                 请用 \x1b[1mnpm install -g @erchoc/chatbot@latest\x1b[0m 升级"
+            );
+            return Ok(());
+        }
+        Channel::Curl | Channel::Direct => {}
+    }
 
     // ── Determine artifact name ─────────────────────────────────────────────
     let artifact = match (std::env::consts::OS, std::env::consts::ARCH) {

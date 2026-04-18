@@ -51,7 +51,7 @@ impl OpenAiClient {
             .json(&json!({
                 "model": self.cfg.model,
                 "messages": messages,
-                "max_tokens": 1000,
+                "max_tokens": 4096,
                 "stream": true
             }))
             .send()

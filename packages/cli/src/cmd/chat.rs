@@ -69,7 +69,8 @@ pub async fn run_text(message: &str, _debug: bool) -> Result<()> {
     );
 
     if let Some(v) = crate::update_check::pending_notice() {
-        println!("   {BR_CYAN}⬆  发现新版本 v{v}，运行 {BOLD}cb update{RESET}{BR_CYAN} 升级{RESET}");
+        let hint = crate::update_check::upgrade_hint();
+        println!("   {BR_CYAN}⬆  发现新版本 v{v}，运行 {BOLD}{hint}{RESET}{BR_CYAN} 升级{RESET}");
     }
 
     Ok(())

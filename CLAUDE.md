@@ -195,6 +195,18 @@ When wake word session is active, `threshold_scale = 0.8` (20% more sensitive).
 **Fix**: Preset now ships `https://api.deepseek.com/v1`. `migrate_legacy` also auto-patches existing profiles whose `base_url` is exactly `https://api.deepseek.com` (trailing slash tolerated) so users who ran the old wizard don't need to re-enter anything.
 **Rule**: For OpenAI-compatible providers, always include the version prefix (`/v1`) in the preset URL — clients append path segments directly, they don't canonicalize. Test each preset end-to-end before shipping: "does `${base_url}/chat/completions` return 200?"
 
+### 20. Update hint assumed every user was a curl user
+**Symptom**: brew users who ran `cb update` on the prompt ended up with a binary that didn't match what `brew info cb` reported. The update notice also told everyone "运行 `cb update` 升级" regardless of how they actually installed.
+**Root cause**: `pending_notice()` emitted a hardcoded `cb update` string; `cmd/update::run()` did a self-replace via `canonicalize() + rename`, which silently overwrites the file inside `/opt/homebrew/Cellar/cb/X.Y.Z/bin/cb`. brew keeps a manifest of the version it installed — rewriting the binary underneath desyncs that, so `brew list --versions` still reports the old version and `brew upgrade` tries to go from old→new even though the file on disk is already new. Same failure mode for npm.
+**Fix**: New `detect_channel()` in `update_check.rs` reads the canonical exe path (`/Cellar/`, `/node_modules/@erchoc/`, `~/.local/bin/cb`) and returns `Curl | Brew | Npm | Direct`. `upgrade_hint()` returns the right command per channel. `cmd/update::run()` now refuses on brew/npm and redirects to `brew upgrade erchoc/tap/cb` / `npm install -g @erchoc/chatbot@latest`. The notice banner in `cb chat`, `cb status`, and the voice daemon all show the channel-correct command.
+**Rule**: A binary that ships through multiple install channels must never assume it owns its own location. Before any self-modifying operation (update, uninstall, file mv under the binary's dir), detect the channel and refuse for package-manager installs. Always check `current_exe().canonicalize()` against known manager paths.
+
+### 21. Daemon ran for weeks without re-checking for updates
+**Symptom**: User running `cb` as a background voice daemon (launchd/systemd) never saw update notices even months after a new release. Foreground `cb chat` users saw them normally.
+**Root cause**: `spawn_background_check()` fired once at daemon startup. `pending_notice()` reads a 24h-cached result, so if the daemon booted before a new release, the cache said "nothing new" and nothing refreshed it until the daemon restarted. Worst case: daemon runs 3 months without a restart, update cache never touched since day 1.
+**Fix**: Call `spawn_background_check()` at the top of the daemon's main voice-turn loop. It's self-throttled (inner guard returns immediately if the cache is <24h old), so the per-turn cost is a cheap file-stat + comparison. Also added `notify_desktop()` — macOS `osascript` / Linux `notify-send` — so when the daemon's stdout banner lands in `cb.stderr.log` (invisible to the user), an OS-level toast actually reaches them.
+**Rule**: Long-lived daemons can't rely on startup-only state. Anything time-sensitive (update checks, cert rotation, config reload) needs to be re-evaluated in the main loop, gated by its own interval cache. Also: daemon stdout is a log file, not a user-facing channel — if a user action is expected, route through the OS notification system, not `println!`.
+
 ## Release Cadence (phased rollout)
 
 每次版本变更按三段式铺开，给追新用户和求稳用户不同节奏：
