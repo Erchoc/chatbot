@@ -38,26 +38,63 @@ case "$OS" in
 esac
 
 # ── Resolve version ──────────────────────────────────────────────────────
-# Priority: CB_VERSION env → first release from /releases (respects channel)
+# Priority: CB_VERSION env → GitHub API (authenticated if GITHUB_TOKEN is
+# set, otherwise anonymous — 60 req/hr per IP).
 #
-# /releases/latest is avoided because GitHub skips pre-releases there; during
-# 0.x we ship pre-releases continuously and the stable endpoint 404s.
+# /releases/latest is avoided by default because GitHub skips pre-releases
+# there; during 0.x we ship pre-releases continuously and the stable
+# endpoint 404s. Set CB_CHANNEL=stable to opt in to that behavior.
 VERSION="${CB_VERSION:-}"
 if [ -z "$VERSION" ]; then
   echo "  Fetching latest release..."
-  if [ "$CHANNEL" = "stable" ]; then
-    VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-      | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": "\(.*\)".*/\1/' || true)
-  else
-    # First entry from /releases list; prereleases are ordered newest-first.
-    VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases?per_page=1" \
-      | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": "\(.*\)".*/\1/' || true)
+
+  AUTH_ARGS=()
+  if [ -n "${GITHUB_TOKEN:-}" ]; then
+    AUTH_ARGS=(-H "Authorization: Bearer $GITHUB_TOKEN")
   fi
+
+  if [ "$CHANNEL" = "stable" ]; then
+    API_URL="https://api.github.com/repos/${REPO}/releases/latest"
+  else
+    API_URL="https://api.github.com/repos/${REPO}/releases?per_page=1"
+  fi
+
+  # Capture both body and status so we can distinguish rate-limit (403)
+  # from no-release-yet (404) from other transport failures.
+  API_BODY=$(mktemp)
+  API_STATUS=$(curl -sSL -o "$API_BODY" -w '%{http_code}' "${AUTH_ARGS[@]}" "$API_URL" || echo '000')
+
+  if [ "$API_STATUS" = "200" ]; then
+    VERSION=$(grep '"tag_name"' "$API_BODY" | head -1 \
+      | sed 's/.*"tag_name": "\(.*\)".*/\1/' || true)
+  elif [ "$API_STATUS" = "403" ]; then
+    echo "" >&2
+    echo "  ⚠  GitHub API rate limit hit (HTTP 403)." >&2
+    if [ -z "${GITHUB_TOKEN:-}" ]; then
+      echo "     Anonymous requests are capped at 60/hr per IP." >&2
+      echo "     Fix: export GITHUB_TOKEN=<your-pat>  (any scope works for read)" >&2
+      echo "          https://github.com/settings/tokens" >&2
+    else
+      echo "     Your GITHUB_TOKEN is likely expired or revoked." >&2
+    fi
+    echo "     Or pin a version: CB_VERSION=v0.1.0-beta.5 curl ... | bash" >&2
+    rm -f "$API_BODY"
+    exit 1
+  elif [ "$API_STATUS" = "404" ] && [ "$CHANNEL" = "stable" ]; then
+    echo "  No stable release yet. Re-run with CB_CHANNEL=any or pin CB_VERSION." >&2
+    rm -f "$API_BODY"
+    exit 1
+  else
+    echo "  GitHub API returned HTTP $API_STATUS from $API_URL" >&2
+    rm -f "$API_BODY"
+    exit 1
+  fi
+  rm -f "$API_BODY"
 fi
 
 if [ -z "$VERSION" ]; then
-  echo "Failed to fetch release version (CHANNEL=$CHANNEL)" >&2
-  echo "Try pinning: CB_VERSION=v0.1.0-beta.3 curl -fsSL ... | bash" >&2
+  echo "Failed to parse release version from API response." >&2
+  echo "Pin a version: CB_VERSION=v0.1.0-beta.5 curl -fsSL ... | bash" >&2
   exit 1
 fi
 
