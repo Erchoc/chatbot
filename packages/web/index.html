@@ -349,6 +349,17 @@
       white-space: pre;
       min-height: 1.6em;
     }
+
+    /* Force every CJK char to render at exactly 2ch width so terminal
+       box-drawing lines up with CJK content. Without this the browser
+       falls back to a proportional CJK font (~1.4× Latin width) and
+       the right-hand │ of the ready banner drifts. */
+    .terminal-body .cjk-char {
+      display: inline-block;
+      width: 2ch;
+      text-align: center;
+      vertical-align: baseline;
+    }
     .terminal-body .cyan { color: #22d3ee; }
     .terminal-body .green { color: #4ade80; }
     .terminal-body .purple { color: #c084fc; }
@@ -1020,6 +1031,17 @@
     let lineIndex = 0;
     let pendingReplace = null; // element that the next line should overwrite
 
+    // Wrap every CJK character (and full-width punctuation) in a fixed-
+    // 2ch span so the browser stops using whatever proportional CJK
+    // fallback font it picked and we get terminal-accurate alignment.
+    // Tags are preserved untouched.
+    const CJK_RE = /(<[^>]*>)|([\u2E80-\u9FFF\u3000-\u303F\uFF00-\uFFEF])/g;
+    function wrapCJK(html) {
+      return html.replace(CJK_RE, (m, tag, ch) =>
+        tag ? tag : `<span class="cjk-char">${ch}</span>`
+      );
+    }
+
     function addLine() {
       if (lineIndex >= lines.length) {
         // Add blinking cursor at the end
@@ -1077,7 +1099,7 @@
             typeNext();
             return;
           }
-          div.innerHTML = rendered;
+          div.innerHTML = wrapCJK(rendered);
           terminal.scrollTop = terminal.scrollHeight;
           setTimeout(typeNext, 25);
         }
@@ -1085,7 +1107,7 @@
         return;
       }
 
-      div.innerHTML = text;
+      div.innerHTML = wrapCJK(text);
       if (!div.parentNode) terminal.appendChild(div);
       terminal.scrollTop = terminal.scrollHeight;
       if (replaceNext) pendingReplace = div;
