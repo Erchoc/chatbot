@@ -48,11 +48,6 @@ VERSION="${CB_VERSION:-}"
 if [ -z "$VERSION" ]; then
   echo "  Fetching latest release..."
 
-  AUTH_ARGS=()
-  if [ -n "${GITHUB_TOKEN:-}" ]; then
-    AUTH_ARGS=(-H "Authorization: Bearer $GITHUB_TOKEN")
-  fi
-
   if [ "$CHANNEL" = "stable" ]; then
     API_URL="https://api.github.com/repos/${REPO}/releases/latest"
   else
@@ -61,8 +56,17 @@ if [ -z "$VERSION" ]; then
 
   # Capture both body and status so we can distinguish rate-limit (403)
   # from no-release-yet (404) from other transport failures.
+  #
+  # We build the curl invocation via if/else rather than a "${ARR[@]}" array
+  # because macOS ships bash 3.2, which errors under `set -u` when expanding
+  # an empty array — even `"${AUTH_ARGS[@]}"` trips it.
   API_BODY=$(mktemp)
-  API_STATUS=$(curl -sSL -o "$API_BODY" -w '%{http_code}' "${AUTH_ARGS[@]}" "$API_URL" || echo '000')
+  if [ -n "${GITHUB_TOKEN:-}" ]; then
+    API_STATUS=$(curl -sSL -o "$API_BODY" -w '%{http_code}' \
+      -H "Authorization: Bearer $GITHUB_TOKEN" "$API_URL" || echo '000')
+  else
+    API_STATUS=$(curl -sSL -o "$API_BODY" -w '%{http_code}' "$API_URL" || echo '000')
+  fi
 
   if [ "$API_STATUS" = "200" ]; then
     VERSION=$(grep '"tag_name"' "$API_BODY" | head -1 \
