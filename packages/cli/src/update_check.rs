@@ -115,20 +115,87 @@ pub fn pending_notice() -> Option<String> {
 }
 
 pub async fn fetch_latest_tag() -> anyhow::Result<String> {
+    fetch_latest(false).await
+}
+
+/// Fetch the most recent release tag. When `include_prerelease` is true, hits
+/// the list endpoint (which includes beta/rc tags); otherwise hits
+/// `/releases/latest` which GitHub filters to stable only.
+pub async fn fetch_latest(include_prerelease: bool) -> anyhow::Result<String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .build()?;
+    let url = if include_prerelease {
+        format!("https://api.github.com/repos/{REPO}/releases?per_page=1")
+    } else {
+        format!("https://api.github.com/repos/{REPO}/releases/latest")
+    };
     let resp: serde_json::Value = client
-        .get(format!("https://api.github.com/repos/{REPO}/releases/latest"))
+        .get(&url)
         .header("User-Agent", "cb-updater")
         .send()
         .await?
         .json()
         .await?;
-    resp["tag_name"]
-        .as_str()
-        .map(|s| s.to_string())
+
+    // /releases/latest returns a single object with .tag_name; the list
+    // endpoint returns an array — normalize here so callers don't care.
+    let tag = if include_prerelease {
+        resp.get(0).and_then(|r| r["tag_name"].as_str())
+    } else {
+        resp["tag_name"].as_str()
+    };
+    tag.map(|s| s.to_string())
         .ok_or_else(|| anyhow::anyhow!("无法获取最新版本号"))
+}
+
+/// Compare two version strings with prerelease awareness. Treats any
+/// `-suffix` (beta, rc, …) as lower than the same `x.y.z` without a suffix,
+/// matching semver's precedence rule. Returns `Ordering::Less/Greater/Equal`.
+///
+/// Examples:
+///   cmp("0.1.0",        "0.1.0")        == Equal
+///   cmp("0.1.0",        "0.1.1")        == Less
+///   cmp("0.1.1-beta.1", "0.1.1")        == Less      (beta predates stable)
+///   cmp("0.1.1-beta.2", "0.1.1-beta.1") == Greater
+///   cmp("0.1.1",        "0.1.1-beta.5") == Greater
+pub fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering::*;
+
+    let parse = |v: &str| -> (Vec<u32>, Option<String>) {
+        let v = v.trim_start_matches('v');
+        let (core, pre) = match v.split_once('-') {
+            Some((core, pre)) => (core, Some(pre.to_string())),
+            None => (v, None),
+        };
+        let nums: Vec<u32> = core
+            .split('.')
+            .map(|p| p.parse::<u32>().unwrap_or(0))
+            .collect();
+        (nums, pre)
+    };
+
+    let (a_nums, a_pre) = parse(a);
+    let (b_nums, b_pre) = parse(b);
+
+    // Compare x.y.z numerically, padding shorter vectors with zeros.
+    let len = a_nums.len().max(b_nums.len());
+    for i in 0..len {
+        let ai = a_nums.get(i).copied().unwrap_or(0);
+        let bi = b_nums.get(i).copied().unwrap_or(0);
+        match ai.cmp(&bi) {
+            Equal => continue,
+            other => return other,
+        }
+    }
+
+    // Numeric part is equal — prerelease presence breaks the tie.
+    match (a_pre, b_pre) {
+        (None, None) => Equal,
+        (None, Some(_)) => Greater, // 0.1.1 > 0.1.1-beta.1
+        (Some(_), None) => Less,    // 0.1.1-beta.1 < 0.1.1
+        (Some(a), Some(b)) => a.cmp(&b), // lexicographic is good enough here
+    }
 }
 
 /// Best-effort desktop notification. Backgrounded daemons write stdout to a
@@ -186,7 +253,8 @@ pub fn spawn_background_check() {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_major_minor;
+    use super::{compare_versions, parse_major_minor};
+    use std::cmp::Ordering::*;
 
     #[test]
     fn parses_plain_version() {
@@ -204,5 +272,35 @@ mod tests {
     fn rejects_malformed() {
         assert_eq!(parse_major_minor("abc"), None);
         assert_eq!(parse_major_minor("1"), None);
+    }
+
+    #[test]
+    fn compare_numeric_parts() {
+        assert_eq!(compare_versions("0.1.0", "0.1.0"), Equal);
+        assert_eq!(compare_versions("0.1.0", "0.1.1"), Less);
+        assert_eq!(compare_versions("0.2.0", "0.1.9"), Greater);
+        assert_eq!(compare_versions("1.0.0", "0.9.9"), Greater);
+    }
+
+    #[test]
+    fn compare_prerelease_ordering() {
+        // semver: prerelease < same x.y.z stable
+        assert_eq!(compare_versions("0.1.1-beta.1", "0.1.1"), Less);
+        assert_eq!(compare_versions("0.1.1", "0.1.1-beta.1"), Greater);
+        assert_eq!(compare_versions("0.1.1-beta.1", "0.1.1-beta.2"), Less);
+        assert_eq!(compare_versions("0.1.1-beta.1", "0.1.1-beta.1"), Equal);
+    }
+
+    #[test]
+    fn compare_prerelease_vs_older_stable() {
+        // A beta of a future release still beats the current stable.
+        assert_eq!(compare_versions("0.1.1-beta.1", "0.1.0"), Greater);
+        assert_eq!(compare_versions("0.1.0", "0.1.1-beta.1"), Less);
+    }
+
+    #[test]
+    fn compare_ignores_v_prefix() {
+        assert_eq!(compare_versions("v0.1.0", "0.1.0"), Equal);
+        assert_eq!(compare_versions("v0.1.1", "v0.1.0"), Greater);
     }
 }

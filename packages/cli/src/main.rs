@@ -40,7 +40,12 @@ enum Commands {
     /// Show daemon service status
     Status,
     /// Update cb to latest version
-    Update,
+    Update {
+        /// Force re-download even if already on the latest stable, and
+        /// include prereleases (beta) when resolving the latest tag.
+        #[arg(short, long)]
+        force: bool,
+    },
     /// Open local web dashboard
     Open,
     /// View conversation event logs
@@ -100,7 +105,7 @@ async fn main() -> anyhow::Result<()> {
                 cmd::chat::run_text(&message.join(" "), cli.debug).await
             }
         }
-        Some(Commands::Update) => cmd::update::run().await,
+        Some(Commands::Update { force }) => cmd::update::run(force).await,
         Some(Commands::Install) => cmd::install::run().await,
         Some(Commands::Uninstall) => cmd::install::uninstall().await,
         Some(Commands::Status) => cmd::install::status().await,

@@ -2,22 +2,51 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 
-use crate::update_check::{fetch_latest_tag, Channel, REPO, detect_channel};
+use crate::update_check::{compare_versions, fetch_latest, Channel, REPO, detect_channel};
 
-pub async fn run() -> Result<()> {
+pub async fn run(force: bool) -> Result<()> {
     let current = env!("CARGO_PKG_VERSION");
     println!("  当前版本: v{current}");
 
-    println!("  检查新版本...");
-    let latest_tag = fetch_latest_tag().await?;
+    // --force widens the resolver to include beta/rc tags AND skips the
+    // "already on latest" short-circuit. Without --force we stay on the
+    // stable-only channel so beta-pushing stays opt-in.
+    println!(
+        "  检查新版本{}...",
+        if force { "（含 beta，--force）" } else { "" }
+    );
+    let latest_tag = fetch_latest(force).await?;
     let latest = latest_tag.trim_start_matches('v');
 
-    if latest == current {
-        println!("  \x1b[92m✓\x1b[0m  已是最新版本");
-        return Ok(());
+    let ord = compare_versions(current, latest);
+    if !force {
+        use std::cmp::Ordering::*;
+        match ord {
+            Equal => {
+                println!("  \x1b[92m✓\x1b[0m  已是最新版本");
+                return Ok(());
+            }
+            Greater => {
+                // Local is ahead of the stable channel (e.g. running a beta).
+                // Staying here would be a silent downgrade — refuse and tell
+                // the user they can force it if they actually want to.
+                println!(
+                    "  \x1b[92m✓\x1b[0m  已是最新版本（当前 v{current} 比稳定版 v{latest} 更新）"
+                );
+                println!(
+                    "     如需切回稳定版或刷到最新 beta，运行 \x1b[1mcb update --force\x1b[0m"
+                );
+                return Ok(());
+            }
+            Less => {} // fall through to upgrade
+        }
+    } else if ord == std::cmp::Ordering::Equal {
+        println!(
+            "  \x1b[90m(已是最新版本 v{current}，--force 强制重新安装)\x1b[0m"
+        );
     }
 
-    println!("  发现新版本: v{current} → {latest_tag}");
+    println!("  目标版本: v{current} → {latest_tag}");
 
     // `cb update` self-replaces the binary. That's fine for curl users, but
     // for brew/npm it would silently desync their package manager's view of

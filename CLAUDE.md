@@ -207,6 +207,13 @@ When wake word session is active, `threshold_scale = 0.8` (20% more sensitive).
 **Fix**: Call `spawn_background_check()` at the top of the daemon's main voice-turn loop. It's self-throttled (inner guard returns immediately if the cache is <24h old), so the per-turn cost is a cheap file-stat + comparison. Also added `notify_desktop()` — macOS `osascript` / Linux `notify-send` — so when the daemon's stdout banner lands in `cb.stderr.log` (invisible to the user), an OS-level toast actually reaches them.
 **Rule**: Long-lived daemons can't rely on startup-only state. Anything time-sensitive (update checks, cert rotation, config reload) needs to be re-evaluated in the main loop, gated by its own interval cache. Also: daemon stdout is a log file, not a user-facing channel — if a user action is expected, route through the OS notification system, not `println!`.
 
+### 22. `cb update` compared versions as strings, would silently downgrade beta users
+**Symptom**: User on v0.1.1-beta.1 runs `cb update`. Latest stable is v0.1.0. String compare: `"0.1.1-beta.1" != "0.1.0"` → code falls through to the download branch, overwriting the beta with the older stable. Silent downgrade.
+**Root cause**: `cmd/update::run()` used raw `latest == current` string equality to decide "already on latest". No awareness that a prerelease sits *between* two stables in semver ordering.
+**Fix**: New `compare_versions()` in `update_check.rs` implements semver precedence (including the rule that `0.1.1-beta.1 < 0.1.1`). `cb update` now uses it: `Equal` → already-on-latest; `Greater` → local is ahead (don't downgrade, suggest `--force` if they actually want to switch channels); `Less` → upgrade. Added tests covering stable/beta/beta-vs-older-stable/v-prefix cases.
+**Also**: added `cb update -f/--force` that (a) widens the resolver to include prereleases via `/releases?per_page=1` instead of `/releases/latest`, and (b) downloads regardless of comparison result. Lets beta追新 users roll forward without the stable-channel safety net.
+**Rule**: Never do string equality on version numbers. Semver has explicit precedence rules — use them, or at minimum compare parsed numeric tuples and treat `-suffix` as "older than same x.y.z without suffix".
+
 ## Release Cadence (phased rollout)
 
 每次版本变更按三段式铺开，给追新用户和求稳用户不同节奏：
