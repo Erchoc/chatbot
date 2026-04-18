@@ -262,6 +262,7 @@
       color: var(--text-muted);
       align-self: flex-start;
       font-family: var(--font-mono);
+      line-height: 1.7;
     }
     .install-hint code {
       background: var(--bg-subtle);
@@ -269,6 +270,15 @@
       border-radius: 4px;
       border: 1px solid var(--border);
       font-size: 0.7rem;
+    }
+    .install-hint a {
+      color: var(--text-secondary);
+      border-bottom: 1px dotted var(--border-hover);
+      text-decoration: none;
+    }
+    .install-hint a:hover {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
     }
 
     @media (max-width: 640px) {
@@ -755,7 +765,7 @@
       <div class="install-hint">
         <span>binary is <code>cb</code> on every channel</span>
         <span class="install-hint-sep">·</span>
-        <span id="install-hint-ctx">pulls latest from github.com/erchoc/chatbot · set <code>GITHUB_TOKEN</code> if rate-limited</span>
+        <span id="install-hint-ctx">pulls latest from <a href="https://github.com/erchoc/chatbot" target="_blank" rel="noopener">github.com/erchoc/chatbot</a><br>set <code>GITHUB_TOKEN</code> if rate-limited</span>
       </div>
     </div>
   </section>
@@ -913,7 +923,7 @@
     // brew and npm pull from their own registries, so don't mention
     // GITHUB_TOKEN under those tabs.
     const INSTALL_HINTS = {
-      curl: 'pulls latest from github.com/erchoc/chatbot · set <code>GITHUB_TOKEN</code> if rate-limited',
+      curl: 'pulls latest from <a href="https://github.com/erchoc/chatbot" target="_blank" rel="noopener">github.com/erchoc/chatbot</a><br>set <code>GITHUB_TOKEN</code> if rate-limited',
       brew: 'Formula <code>erchoc/tap/cb</code> · macOS only',
       npm:  'Node.js 16 or newer',
     };
