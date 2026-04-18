@@ -228,10 +228,16 @@ pub fn set(key: &str, value: &str) -> Result<()> {
 
     match key {
         "persona.name" => {
-            // Only auto-update wake word if it still matches the default pattern
-            let old_default = format!("嘿{}", cfg.persona.name);
+            // Only auto-update wake word if it still matches a default pattern.
+            // Two patterns we've shipped:
+            //   - current default: "{name}{name}"  (reduplication — 小派小派)
+            //   - legacy default:  "嘿{name}"       (from pre-0.1.1 installs)
+            let redup = format!("{}{}", cfg.persona.name, cfg.persona.name);
+            let legacy = format!("嘿{}", cfg.persona.name);
             cfg.persona.name = value.to_string();
-            if cfg.persona.wake_word.word == old_default {
+            if cfg.persona.wake_word.word == redup {
+                cfg.persona.wake_word.word = format!("{value}{value}");
+            } else if cfg.persona.wake_word.word == legacy {
                 cfg.persona.wake_word.word = format!("嘿{value}");
             }
         }
@@ -320,10 +326,10 @@ fn wizard_persona(cfg: &mut AppConfig) -> Result<()> {
     }
     println!();
 
-    // Wake word — default is "嘿{name}", but user can customize
-    let default_wake = format!("嘿{}", cfg.persona.name);
-    if cfg.persona.wake_word.word.is_empty() || cfg.persona.wake_word.word == default_wake {
-        cfg.persona.wake_word.word = default_wake;
+    // Wake word — default is "{name}{name}" (reduplication, e.g. 小派小派).
+    let default_wake = format!("{}{}", cfg.persona.name, cfg.persona.name);
+    if cfg.persona.wake_word.word.is_empty() {
+        cfg.persona.wake_word.word = default_wake.clone();
     }
     if let Some(v) = prompt_optional("   唤醒词", &cfg.persona.wake_word.word)? {
         cfg.persona.wake_word.word = v;

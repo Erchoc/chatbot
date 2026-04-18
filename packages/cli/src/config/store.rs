@@ -131,7 +131,7 @@ pub struct PersonaConfig {
 }
 
 fn default_name() -> String {
-    "Chatbox".into()
+    "小派".into()
 }
 fn default_language() -> String {
     "zh".into()
@@ -140,13 +140,13 @@ fn default_language() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WakeWordConfig {
     pub enabled: bool,
-    /// The trigger phrase, e.g. "嘿小派" or "Hey Chatbox"
+    /// The trigger phrase, e.g. "小派小派" or "Hey Chatbox"
     #[serde(default = "default_wake_word")]
     pub word: String,
 }
 
 fn default_wake_word() -> String {
-    "嘿小派".into()
+    "小派小派".into()
 }
 
 // ─── LLM profiles ────────────────────────────────────────────────────────────
@@ -250,7 +250,7 @@ impl Default for PersonaConfig {
 impl Default for WakeWordConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             word: default_wake_word(),
         }
     }
