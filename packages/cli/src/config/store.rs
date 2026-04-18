@@ -355,6 +355,15 @@ impl AppConfig {
             }
         }
 
+        // DeepSeek v1 path: early configs stored the bare host, which 404s
+        // because this client appends /chat/completions directly. Bump to /v1
+        // transparently so existing users don't have to re-run the wizard.
+        for profile in self.llm_profiles.iter_mut() {
+            if profile.base_url.trim_end_matches('/') == "https://api.deepseek.com" {
+                profile.base_url = "https://api.deepseek.com/v1".into();
+            }
+        }
+
         // Ensure active_llm points to an existing profile
         if !self.active_llm.is_empty()
             && !self.llm_profiles.iter().any(|p| p.name == self.active_llm)

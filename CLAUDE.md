@@ -183,6 +183,18 @@ When wake word session is active, `threshold_scale = 0.8` (20% more sensitive).
 **Fix**: Both helpers now use `libc::localtime_r` to render in the process's local timezone; fallback to UTC if the host can't resolve the offset. `cb logs` recomputes time from `entry.ts` at display time (not the stored `entry.time` string) so historical UTC-written entries also render in local time.
 **Rule**: Timestamps persisted to disk should always be tz-agnostic (unix ms). Human-facing strings should always be rendered in the viewer's local timezone at display time, not baked at write time. Never show UTC to an end user unless the UI explicitly labels it.
 
+### 18. `cb config` saved to disk but running daemon kept using old config
+**Symptom**: User enables wake word via wizard, but the backgrounded `cb` daemon keeps behaving as if wake word were off. No error — the daemon is just running on its in-memory snapshot of config from whenever it booted.
+**Root cause**: `AppConfig::load()` is called once at daemon startup. There's no watcher on the TOML file, and the daemon holds its config for its entire lifetime. Config saves from a different process (the wizard) never reach the daemon.
+**Fix**: New `save_and_reload` helper in `cmd/config.rs` wraps `cfg.save()` — after writing, if `is_daemon_running()`, it calls `restart_daemon()` (a SIGTERM to the launchd/systemd-supervised process, which auto-restarts via `KeepAlive` / `Restart=always` and reads fresh config on boot). Wired into wizard, first-run `ensure_config`, and `cb config set`. Also promoted the daemon helpers in `cmd/update.rs` from private to `pub` and replaced the hardcoded `gui/501/...` launchd target with `libc::getuid()` so it works for non-501 users.
+**Rule**: Any config write that could affect a long-running daemon must trigger a restart when the daemon is active. Never assume "config file on disk = config in memory" — only processes that reread do. If the daemon path is optional (not every user has one), gate on `is_daemon_running()` so foreground-only users don't see a bogus "restarted" message.
+
+### 19. DeepSeek `base_url` without `/v1` 404s on `/chat/completions`
+**Symptom**: User picks "DeepSeek" in the LLM preset wizard, saves, then every chat turn errors 404.
+**Root cause**: Preset was `https://api.deepseek.com`. This client builds requests as `${base_url}/chat/completions`, which becomes `https://api.deepseek.com/chat/completions` — DeepSeek serves the OpenAI-compatible API at `/v1/chat/completions`, so the bare host 404s. DeepSeek's docs list both forms but only `/v1` actually works with raw OpenAI-compatible clients.
+**Fix**: Preset now ships `https://api.deepseek.com/v1`. `migrate_legacy` also auto-patches existing profiles whose `base_url` is exactly `https://api.deepseek.com` (trailing slash tolerated) so users who ran the old wizard don't need to re-enter anything.
+**Rule**: For OpenAI-compatible providers, always include the version prefix (`/v1`) in the preset URL — clients append path segments directly, they don't canonicalize. Test each preset end-to-end before shipping: "does `${base_url}/chat/completions` return 200?"
+
 ## Release Cadence (phased rollout)
 
 每次版本变更按三段式铺开，给追新用户和求稳用户不同节奏：

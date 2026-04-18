@@ -8,7 +8,7 @@ pub struct LlmPreset {
 pub const LLM_PRESETS: &[LlmPreset] = &[
     LlmPreset {
         name: "DeepSeek",
-        base_url: "https://api.deepseek.com",
+        base_url: "https://api.deepseek.com/v1",
         default_model: "deepseek-chat",
         needs_key: true,
     },

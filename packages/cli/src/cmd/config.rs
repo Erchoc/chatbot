@@ -2,6 +2,7 @@ use std::io::{self, Write};
 
 use anyhow::Result;
 
+use crate::cmd::update::{is_daemon_running, restart_daemon};
 use crate::config::{
     is_real_value,
     providers::{DOUBAO_VOICES, LLM_PRESETS, VoicePreset},
@@ -11,6 +12,19 @@ use crate::ui::{
     select::{self, SelectOption},
     theme::*,
 };
+
+/// Save config and, if the background daemon is running, restart it so the
+/// change takes effect immediately. Without this, changing the wake word (or
+/// any other daemon-relevant setting) in `cb config` would leave the long-
+/// lived daemon humming along with the stale, cached config.
+fn save_and_reload(cfg: &AppConfig) -> Result<()> {
+    cfg.save()?;
+    if is_daemon_running() {
+        restart_daemon();
+        println!("   {MUTED}后台服务已重启以应用新配置{RESET}");
+    }
+    Ok(())
+}
 
 // ─── Public entry points ──────────────────────────────────────────────────────
 
@@ -23,7 +37,7 @@ pub async fn run_wizard() -> Result<()> {
     wizard_speech(&mut cfg)?;
     wizard_voice(&mut cfg).await?;
 
-    cfg.save()?;
+    save_and_reload(&cfg)?;
     println!();
     let path = config_path_display();
     println!("   {BR_GREEN}✓{RESET}  已保存 → {MUTED}{path}{RESET}");
@@ -97,7 +111,7 @@ pub fn ensure_config(mut cfg: AppConfig) -> Result<AppConfig> {
         cfg.speech.doubao.access_token = prompt_required("   Access Token")?;
     }
 
-    cfg.save()?;
+    save_and_reload(&cfg)?;
     println!();
     println!("   {BR_GREEN}✓{RESET}  配置已保存，运行 {BOLD}cb config{RESET} 进入完整设置");
     println!();
@@ -269,7 +283,7 @@ pub fn set(key: &str, value: &str) -> Result<()> {
         ),
     }
 
-    cfg.save()?;
+    save_and_reload(&cfg)?;
     println!("   {BR_GREEN}✓{RESET}  {key} = {BOLD}{value}{RESET}");
     Ok(())
 }

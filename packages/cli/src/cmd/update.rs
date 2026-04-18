@@ -76,7 +76,7 @@ pub async fn run() -> Result<()> {
     Ok(())
 }
 
-fn is_daemon_running() -> bool {
+pub fn is_daemon_running() -> bool {
     if cfg!(target_os = "macos") {
         Command::new("launchctl")
             .args(["list", "com.erchoc.chatbot"])
@@ -96,11 +96,13 @@ fn is_daemon_running() -> bool {
     }
 }
 
-fn restart_daemon() {
+pub fn restart_daemon() {
     if cfg!(target_os = "macos") {
-        // KeepAlive=true means launchctl will auto-restart after kill
+        // Target launchd in the caller's GUI session — uid 501 worked for me
+        // but breaks for any other user, so resolve it dynamically.
+        let uid = unsafe { libc::getuid() };
         let _ = Command::new("launchctl")
-            .args(["kill", "SIGTERM", "gui/501/com.erchoc.chatbot"])
+            .args(["kill", "SIGTERM", &format!("gui/{uid}/com.erchoc.chatbot")])
             .output();
         // Fallback: pkill if launchctl kill doesn't work
         let _ = Command::new("pkill").args(["-f", "cb chat"]).output();
