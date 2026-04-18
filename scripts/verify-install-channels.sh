@@ -1,4 +1,22 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# If invoked as `sh scripts/verify-install-channels.sh` (i.e. /bin/sh),
+# macOS feeds the file to bash-in-POSIX-mode, which disables process
+# substitution and makes line 175 die with a syntax error before any
+# of our code runs. Detect any restricted mode (no BASH_VERSION, or
+# POSIXLY_CORRECT set, or SHELLOPTS mentions posix) and re-exec under
+# real bash so the user can run `sh scripts/verify-install-channels.sh`
+# without thinking about it.
+if [ -z "${BASH_VERSION:-}" ] \
+   || [ -n "${POSIXLY_CORRECT:-}" ] \
+   || [ "${BASH##*/}" = "sh" ]; then
+  if command -v bash >/dev/null 2>&1; then
+    exec bash "$0" "$@"
+  else
+    echo "This script needs bash (not /bin/sh). Install bash and retry." >&2
+    exit 1
+  fi
+fi
+
 # Three-channel smoke test for the `cb` voice assistant CLI.
 #
 # For each of: curl install.sh | npm | brew

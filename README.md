@@ -40,17 +40,27 @@
 
 ## Install
 
-### Homebrew (macOS / Linux)
-
-```bash
-brew install erchoc/chatbot/cb
-```
-
-### Shell script
+### Shell script (macOS / Linux)
 
 ```bash
 curl -fsSL https://chatbot.longye.site/install.sh | bash
 ```
+
+Set `GITHUB_TOKEN` beforehand if you're hitting anonymous API rate limits (60 req/hr). Pin a version with `CB_VERSION=v0.1.0-beta.5 curl ... | bash`.
+
+### Homebrew (macOS / Linux)
+
+```bash
+brew install erchoc/tap/cb
+```
+
+### npm
+
+```bash
+npm install -g @erchoc/chatbot
+```
+
+Binary is still `cb` — the npm package is named for registry discovery.
 
 ### Direct download
 
@@ -184,14 +194,40 @@ pnpm verify         # lint + typecheck + test + build
 
 ### Release
 
-Releases are automated via GitHub Actions. Push a version tag to build and publish:
+Push a version tag to build and publish:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.0-beta.5
+git push origin main v0.1.0-beta.5
 ```
 
-Builds macOS Universal (arm64 + x86_64), Linux x86_64, and Linux aarch64 binaries.
+`.github/workflows/release.yml` then:
+
+1. Builds macOS Universal (arm64 + x86_64), Linux x86_64, Linux aarch64
+2. Creates a GitHub Release with those artifacts (pre-release is auto-flagged for any tag containing `-`)
+3. Chains `publish-npm` — publishes `@erchoc/chatbot@<version>` to npm
+
+**What's NOT automatic**: the Homebrew Formula at [`Erchoc/homebrew-tap/Formula/cb.rb`](https://github.com/Erchoc/homebrew-tap/blob/master/Formula/cb.rb) must be updated manually after each release (bump `version` + 3 sha256 values from the new artifacts).
+
+**Plain commits to `main`** trigger CI and redeploy the Vercel web site (including the `install.sh` endpoint). They do *not* trigger releases.
+
+### Verifying install channels
+
+`scripts/verify-install-channels.sh` runs the same smoke test across all three install channels (curl / npm / brew) to confirm a release is healthy end-to-end. It backs up `~/.config/chatbot/` before running and restores afterward — safe to run any time.
+
+```bash
+# Test whatever the GitHub "latest" release resolves to
+export GITHUB_TOKEN=$(gh auth token)   # avoids anonymous rate limit
+./scripts/verify-install-channels.sh
+
+# Lock the expected version (fails if any channel returns something else)
+EXPECTED_VERSION=v0.1.0-beta.5 ./scripts/verify-install-channels.sh
+
+# Narrow to one channel
+SKIP_NPM=1 SKIP_BREW=1 ./scripts/verify-install-channels.sh
+```
+
+For each channel the script installs, checks `--version`, `--help` (Usage line), `cb config show` (config reachability), uninstalls, then emits a summary table plus any anomalies. The script is non-interactive — it never invokes `cb`, `cb chat`, `cb config` (wizard), or `cb install` (daemon).
 
 ---
 

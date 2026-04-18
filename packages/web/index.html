@@ -81,34 +81,6 @@
       pointer-events: none;
     }
 
-    .hero-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-      padding: 0.35rem 1rem;
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      font-size: 0.8rem;
-      color: var(--text-secondary);
-      margin-bottom: 2rem;
-      background: var(--bg-subtle);
-      position: relative;
-      z-index: 1;
-    }
-
-    .hero-badge .dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: var(--accent-3);
-      animation: pulse 2s ease-in-out infinite;
-    }
-
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.4; }
-    }
-
     .hero h1 {
       font-size: clamp(3rem, 8vw, 6rem);
       font-weight: 700;
@@ -181,56 +153,121 @@
     }
 
     /* ===== Install Command ===== */
-    .install-cmd {
+    /* ===== Install Panel (tabbed) ===== */
+    .install-panel {
       margin-top: 3rem;
       position: relative;
       z-index: 1;
+      display: inline-flex;
+      flex-direction: column;
+      align-items: stretch;
+      min-width: 520px;
+      max-width: 100%;
     }
 
-    .install-cmd code {
+    .install-tabs {
       display: inline-flex;
+      gap: 0.25rem;
+      padding: 0.25rem;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      margin-bottom: 0.75rem;
+      align-self: flex-start;
+    }
+
+    .install-tab {
+      padding: 0.4rem 0.9rem;
+      background: transparent;
+      color: var(--text-secondary);
+      border: none;
+      border-radius: 6px;
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .install-tab:hover { color: var(--text); }
+    .install-tab.active {
+      background: var(--bg-card);
+      color: var(--text);
+      box-shadow: 0 0 0 1px var(--border);
+    }
+    .install-tab-platform {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      margin-left: 0.35rem;
+    }
+    .install-tab.active .install-tab-platform { color: var(--text-secondary); }
+
+    .install-code-box {
+      display: flex;
       align-items: center;
-      gap: 0.75rem;
-      padding: 0.75rem 1.25rem;
+      gap: 0.5rem;
+      padding: 0.75rem 0.85rem 0.75rem 1.1rem;
       background: var(--bg-subtle);
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
       font-family: var(--font-mono);
       font-size: 0.9rem;
       color: var(--text-secondary);
-      cursor: pointer;
       transition: border-color 0.2s, background 0.2s;
-      user-select: none;
+      text-align: left;
     }
 
-    .install-cmd code:hover {
+    .install-code-box .prompt { color: var(--accent); flex-shrink: 0; }
+    .install-code-box .cmd-text {
+      user-select: text;
+      flex: 1;
+      overflow-x: auto;
+      white-space: nowrap;
+      color: var(--text);
+    }
+    .install-code-box .cmd-text::-webkit-scrollbar { height: 0; }
+
+    .install-copy-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.35rem 0.7rem;
+      background: transparent;
+      color: var(--text-secondary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: var(--font);
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: all 0.15s;
+      flex-shrink: 0;
+    }
+    .install-copy-btn:hover {
+      color: var(--text);
       border-color: var(--border-hover);
     }
-
-    .install-cmd code.copied {
+    .install-copy-btn.copied {
+      color: var(--accent-3);
       border-color: var(--accent-3);
       background: rgba(34, 197, 94, 0.08);
     }
 
-    .install-cmd code .prompt { color: var(--accent); }
-    .install-cmd code .cmd-text { user-select: text; }
-
-    .install-cmd code .copy-icon {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.35rem;
-      opacity: 0.5;
-      transition: opacity 0.2s, color 0.2s;
-      font-size: 0.8rem;
-    }
-
-    .install-cmd code:hover .copy-icon { opacity: 1; }
-    .install-cmd code.copied .copy-icon { opacity: 1; color: var(--accent-3); }
-
     .install-hint {
       margin-top: 0.75rem;
-      font-size: 0.8rem;
+      font-size: 0.75rem;
       color: var(--text-muted);
+      align-self: flex-start;
+      font-family: var(--font-mono);
+    }
+    .install-hint code {
+      background: var(--bg-subtle);
+      padding: 0.1rem 0.35rem;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      font-size: 0.7rem;
+    }
+
+    @media (max-width: 640px) {
+      .install-panel { min-width: 0; width: 100%; }
+      .install-code-box { font-size: 0.8rem; padding: 0.6rem 0.75rem; }
     }
 
     /* ===== Terminal Demo ===== */
@@ -669,10 +706,6 @@
 
   <!-- Hero -->
   <section class="hero">
-    <div class="hero-badge">
-      <span class="dot"></span>
-      Open Source
-    </div>
     <h1>
       Voice AI<br>
       <span class="gradient">in your terminal.</span>
@@ -687,16 +720,31 @@
       </a>
       <a href="#install" class="btn btn-secondary">Get Started</a>
     </div>
-    <div class="install-cmd" id="install">
-      <code id="install-cmd" data-cmd="brew install erchoc/tap/chatbot" onclick="copyInstallCmd(this)" title="Click to copy">
+
+    <div class="install-panel" id="install">
+      <div class="install-tabs" role="tablist">
+        <button class="install-tab active" data-tab="curl" role="tab">
+          curl<span class="install-tab-platform">macOS · Linux</span>
+        </button>
+        <button class="install-tab" data-tab="brew" role="tab">
+          brew<span class="install-tab-platform">macOS · Linux</span>
+        </button>
+        <button class="install-tab" data-tab="npm" role="tab">
+          npm<span class="install-tab-platform">any Node env</span>
+        </button>
+      </div>
+      <div class="install-code-box">
         <span class="prompt">$</span>
-        <span class="cmd-text">brew install erchoc/tap/chatbot</span>
-        <span class="copy-icon" aria-hidden="true">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M10 5V3a1 1 0 00-1-1H3a1 1 0 00-1 1v6a1 1 0 001 1h2"/></svg>
+        <span class="cmd-text" id="install-cmd-text">curl -fsSL https://chatbot.longye.site/install.sh | bash</span>
+        <button class="install-copy-btn" id="install-copy-btn" onclick="copyInstallCmd()">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M10 5V3a1 1 0 00-1-1H3a1 1 0 00-1 1v6a1 1 0 001 1h2"/></svg>
           <span class="copy-label">Copy</span>
-        </span>
-      </code>
-      <div class="install-hint">或 <code style="font-size:0.8rem;padding:0.15rem 0.4rem;background:var(--bg-subtle);border:1px solid var(--border);border-radius:4px;">npm i -g @erchoc/chatbot</code> · <code style="font-size:0.8rem;padding:0.15rem 0.4rem;background:var(--bg-subtle);border:1px solid var(--border);border-radius:4px;">curl -fsSL https://chatbot.longye.site/install.sh | bash</code></div>
+        </button>
+      </div>
+      <div class="install-hint">
+        binary is <code>cb</code> on every channel ·
+        set <code>GITHUB_TOKEN</code> to avoid API rate limits on curl
+      </div>
     </div>
   </section>
 
@@ -841,23 +889,38 @@
     </p>
   </footer>
 
-  <!-- Copy to clipboard -->
+  <!-- Install tabs + copy to clipboard -->
   <script>
-    function copyInstallCmd(el) {
-      const cmd = el.dataset.cmd;
-      const label = el.querySelector('.copy-label');
+    const INSTALL_COMMANDS = {
+      curl: 'curl -fsSL https://chatbot.longye.site/install.sh | bash',
+      brew: 'brew install erchoc/tap/cb',
+      npm:  'npm install -g @erchoc/chatbot',
+    };
+
+    document.querySelectorAll('.install-tab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.install-tab').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const key = btn.dataset.tab;
+        document.getElementById('install-cmd-text').textContent = INSTALL_COMMANDS[key] || '';
+      });
+    });
+
+    function copyInstallCmd() {
+      const cmd = document.getElementById('install-cmd-text').textContent;
+      const btn = document.getElementById('install-copy-btn');
+      const label = btn.querySelector('.copy-label');
       const original = label ? label.textContent : '';
 
       const markCopied = () => {
-        el.classList.add('copied');
+        btn.classList.add('copied');
         if (label) label.textContent = 'Copied!';
         setTimeout(() => {
-          el.classList.remove('copied');
+          btn.classList.remove('copied');
           if (label) label.textContent = original;
         }, 1600);
       };
 
-      // Prefer async clipboard API (requires secure context)
       if (navigator.clipboard && window.isSecureContext) {
         navigator.clipboard.writeText(cmd).then(markCopied).catch(() => fallbackCopy(cmd, markCopied));
       } else {
@@ -877,7 +940,6 @@
         document.execCommand('copy');
         onDone();
       } catch (_) {
-        // Last resort: alert so the user can copy manually
         window.prompt('Copy the command:', text);
       } finally {
         document.body.removeChild(ta);
