@@ -1,6 +1,6 @@
 [package]
 name = "chatbot"
-version = "0.1.0"
+version = "0.1.1-beta.1"
 edition = "2021"
 description = "跨平台语音助手 CLI"
 license = "MIT"
