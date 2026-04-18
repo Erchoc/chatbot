@@ -74,6 +74,15 @@ enum ConfigAction {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Rust 1.66+ installs a SIGPIPE handler that aborts with a panic
+    // (exit 101) when stdout is closed mid-write. That breaks every
+    // `cb config show | head -5` style invocation. Restore the POSIX
+    // default so the process exits silently (128 + SIGPIPE = 141).
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+
     ui::theme::init_colors();
     config::migrate_config_path();
     let cli = Cli::parse();
