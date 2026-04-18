@@ -21,7 +21,7 @@ on:
 
 jobs:
   npm:
-    uses: Erchoc/homebrew-tap/.github/workflows/publish-npm-reusable.yml@master
+    uses: Erchoc/homebrew-tap/.github/workflows/publish-npm-reusable.yml@main
     with:
       tool:        cb
       release_tag: ${{ inputs.release_tag }}
