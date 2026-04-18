@@ -13,7 +13,10 @@ mod update_check;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "cb", version, about = "Cross-platform voice assistant CLI")]
+// `bin_name` forces the Usage: line to render "cb" regardless of argv[0],
+// otherwise the npm wrapper's `cb-darwin` / `cb-linux-x64` shim names leak
+// into help output.
+#[command(name = "cb", bin_name = "cb", version, about = "Cross-platform voice assistant CLI")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
