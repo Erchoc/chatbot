@@ -183,6 +183,22 @@ When wake word session is active, `threshold_scale = 0.8` (20% more sensitive).
 **Fix**: Both helpers now use `libc::localtime_r` to render in the process's local timezone; fallback to UTC if the host can't resolve the offset. `cb logs` recomputes time from `entry.ts` at display time (not the stored `entry.time` string) so historical UTC-written entries also render in local time.
 **Rule**: Timestamps persisted to disk should always be tz-agnostic (unix ms). Human-facing strings should always be rendered in the viewer's local timezone at display time, not baked at write time. Never show UTC to an end user unless the UI explicitly labels it.
 
+## Release Cadence (phased rollout)
+
+每次版本变更按三段式铺开，给追新用户和求稳用户不同节奏：
+
+| 阶段 | 时机 | 动作 | 触达的用户 |
+|------|------|------|-----------|
+| 1. curl | 立即 | `git push` 到 main（Vercel 自动部署 install.sh）+ tag 一个 prerelease（或让 curl 走 `CB_CHANNEL=any`） | 追新用户：`curl ... \| bash` 抓最新 release |
+| 2. 正式版 | 次日无反馈 | tag 稳定版（如 `v0.1.1`），推触发 release.yml → npm 同步发布 | `CB_CHANNEL=stable` 的 curl 用户 + `npm install -g @erchoc/chatbot` |
+| 3. brew | 正式版发布一周后无反馈 | 在 `Erchoc/homebrew-tap` 手动运行 `bump formulae` workflow（tool=cb） | `brew install erchoc/tap/cb` 的求稳用户 |
+
+**规则**：
+- 任何阶段收到用户负反馈 → 回滚到上一阶段，修复后重新从阶段 1 开始。
+- 阶段 2、3 之间不要跳步。brew 是最慢的那一档，默认一周 soak。
+- 修 bug（即使是紧急）也走一样的流程 —— curl 先上，次日升正式版，一周升 brew。
+- `CB_CHANNEL` 默认值 `any`（含 prerelease），所以 curl 用户会自动拿到阶段 1 的版本。
+
 ## Rules
 
 - **Breaking changes after v1.0.0**: Any change that alters user-facing behavior, config format, file paths, or CLI interface must be confirmed with the user before proceeding.
