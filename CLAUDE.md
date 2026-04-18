@@ -219,3 +219,4 @@ When wake word session is active, `threshold_scale = 0.8` (20% more sensitive).
 - [x] `cb status` surfaces daemon mic-failure retry loop (reads stderr/journald)
 - [x] `cb install` post-load smoke test rolls back broken installs
 - [x] Logs render in local timezone (was UTC, confused users about event recency)
+- [x] **v0.1.0 released** (2026-04-18) — 四端生效: GitHub Release / curl install.sh / Homebrew tap / npm `@erchoc/chatbot`
