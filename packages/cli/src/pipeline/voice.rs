@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use reqwest::Client;
 use serde_json::{json, Value};
+use tokio::sync::{oneshot, Semaphore};
 
 use crate::audio::capture::{calibrate_noise, record_speech, RecordParams};
 use crate::audio::playback::spawn_player;
@@ -481,10 +482,58 @@ impl VoicePipeline {
         let tts_client = self.client.clone();
         let tts_cfg = self.cfg.speech.doubao.clone();
         let tts_ms_clone = tts_ms.clone();
-        let audio_tx_clone = audio_tx.clone();
+
+        // Cap concurrent TTS requests so bursty LLM output doesn't spike
+        // past Doubao's QPS limit (~5-10 on typical accounts).
+        let tts_sem = Arc::new(Semaphore::new(3));
+
+        // Ordered flush: dispatcher pushes a oneshot::Receiver per sentence
+        // in dispatch order; forwarder awaits them sequentially and sends
+        // MP3s to the player in that same order. Short sentences can
+        // finish synthesis ahead of long ones, but playback stays ordered.
+        let (order_tx, mut order_rx) =
+            tokio::sync::mpsc::unbounded_channel::<oneshot::Receiver<Option<Vec<u8>>>>();
+
+        let audio_tx_forwarder = audio_tx.clone();
+        let forwarder = tokio::spawn(async move {
+            while let Some(rx) = order_rx.recv().await {
+                if let Ok(Some(mp3)) = rx.await {
+                    if audio_tx_forwarder.send(mp3).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
 
         let tts_dispatcher = tokio::spawn(async move {
             let mut pending = String::new();
+
+            let dispatch = |text: String,
+                            c: Client,
+                            cf: crate::config::DoubaoConfig,
+                            ms: Arc<AtomicU64>,
+                            sem: Arc<Semaphore>,
+                            order_tx: &tokio::sync::mpsc::UnboundedSender<
+                oneshot::Receiver<Option<Vec<u8>>>,
+            >| {
+                let (done_tx, done_rx) = oneshot::channel();
+                if order_tx.send(done_rx).is_err() {
+                    return;
+                }
+                tokio::spawn(async move {
+                    let _permit = sem.acquire_owned().await.ok();
+                    let tts = DoubaoTts::new(c, cf);
+                    let t = Instant::now();
+                    let mp3 = tts.synthesize(&text).await.ok().flatten();
+                    if mp3.is_some() {
+                        ms.fetch_add(
+                            (t.elapsed().as_secs_f32() * 1000.0) as u64,
+                            Ordering::Relaxed,
+                        );
+                    }
+                    let _ = done_tx.send(mp3);
+                });
+            };
 
             while let Some(token) = token_rx.recv().await {
                 pending.push_str(&token);
@@ -492,40 +541,35 @@ impl VoicePipeline {
                 if pending.chars().any(is_sentence_end) && !pending.trim().is_empty() {
                     let text = pending.trim().to_string();
                     pending.clear();
-                    let tx = audio_tx_clone.clone();
-                    let c = tts_client.clone();
-                    let cf = tts_cfg.clone();
-                    let ms = tts_ms_clone.clone();
-                    tokio::spawn(async move {
-                        let tts = DoubaoTts::new(c, cf);
-                        let t = Instant::now();
-                        if let Ok(Some(mp3)) = tts.synthesize(&text).await {
-                            ms.fetch_add(
-                                (t.elapsed().as_secs_f32() * 1000.0) as u64,
-                                Ordering::Relaxed,
-                            );
-                            let _ = tx.send(mp3);
-                        }
-                    });
+                    dispatch(
+                        text,
+                        tts_client.clone(),
+                        tts_cfg.clone(),
+                        tts_ms_clone.clone(),
+                        tts_sem.clone(),
+                        &order_tx,
+                    );
                 }
             }
 
             if !pending.trim().is_empty() {
                 let text = pending.trim().to_string();
-                let tts = DoubaoTts::new(tts_client, tts_cfg);
-                let t = Instant::now();
-                if let Ok(Some(mp3)) = tts.synthesize(&text).await {
-                    tts_ms_clone.fetch_add(
-                        (t.elapsed().as_secs_f32() * 1000.0) as u64,
-                        Ordering::Relaxed,
-                    );
-                    let _ = audio_tx_clone.send(mp3);
-                }
+                dispatch(
+                    text,
+                    tts_client.clone(),
+                    tts_cfg.clone(),
+                    tts_ms_clone.clone(),
+                    tts_sem.clone(),
+                    &order_tx,
+                );
             }
+
+            drop(order_tx);
         });
 
         let result = llm_handle.await?;
         let _ = tts_dispatcher.await;
+        let _ = forwarder.await;
 
         println!();
         drop(audio_tx);

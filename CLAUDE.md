@@ -267,3 +267,9 @@ When wake word session is active, `threshold_scale = 0.8` (20% more sensitive).
 - [x] `cb install` post-load smoke test rolls back broken installs
 - [x] Logs render in local timezone (was UTC, confused users about event recency)
 - [x] **v0.1.0 released** (2026-04-18) — 四端生效: GitHub Release / curl install.sh / Homebrew tap / npm `@erchoc/chatbot`
+- [x] ASR/TTS 一轮优化（非协议层）:
+  - TTS 句子播放顺序修复（oneshot + forwarder，短句不再抢播长句前面）
+  - TTS 并发限流（`Semaphore(3)`，防 QPS 超限）
+  - TTS 磁盘缓存（`~/.config/chatbot/cache/tts/<hash>.mp3`，重复台词 0 延迟）
+  - ASR 音频帧跳过 gzip（PCM 压不动，白烧 CPU）
+  - ASR/TTS 瞬时错误重试 1 次（5xx/网络抖动，401 不重试）

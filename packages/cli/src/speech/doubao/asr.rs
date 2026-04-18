@@ -17,10 +17,13 @@ use crate::config::DoubaoConfig;
 use crate::speech::Asr;
 
 // WebSocket binary protocol frame headers (Doubao ASR v3)
+// Byte[2] high nibble = serialization (1=JSON), low nibble = compression (1=gzip, 0=none).
+// JSON config frame is gzip-compressed; PCM audio is incompressible so we send raw.
 const WS_FULL_CLIENT: [u8; 4] = [0x11, 0x10, 0x11, 0x00];
-const WS_AUDIO_ONLY: [u8; 4] = [0x11, 0x20, 0x11, 0x00];
-const WS_LAST_AUDIO: [u8; 4] = [0x11, 0x22, 0x11, 0x00];
+const WS_AUDIO_ONLY: [u8; 4] = [0x11, 0x20, 0x10, 0x00];
+const WS_LAST_AUDIO: [u8; 4] = [0x11, 0x22, 0x10, 0x00];
 const ASR_SEG_SIZE: usize = 160_000; // 5s @ 16kHz * 2 bytes
+const MAX_RETRIES: u32 = 1;
 
 const TARGET_RATE: u32 = 16000;
 
@@ -49,7 +52,29 @@ macro_rules! debug_log {
 impl Asr for DoubaoAsr {
     async fn recognize(&self, wav_data: &[u8]) -> Result<(String, f32)> {
         let t0 = Instant::now();
+        let mut attempt: u32 = 0;
+        loop {
+            match self.recognize_once(wav_data, t0).await {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    if attempt >= MAX_RETRIES || !is_transient_asr_error(&e) {
+                        return Err(e);
+                    }
+                    attempt += 1;
+                    debug_log!(
+                        self,
+                        "   {MUTED}[DEBUG] ASR transient error, retrying ({attempt}/{MAX_RETRIES}): {e}{RESET}"
+                    );
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500 * attempt as u64))
+                        .await;
+                }
+            }
+        }
+    }
+}
 
+impl DoubaoAsr {
+    async fn recognize_once(&self, wav_data: &[u8], t0: Instant) -> Result<(String, f32)> {
         let connect_id = Uuid::new_v4().to_string();
         debug_log!(
             self,
@@ -88,7 +113,7 @@ impl Asr for DoubaoAsr {
             other => anyhow::anyhow!("ASR WebSocket connection failed: {other}"),
         })?;
 
-        // 1. Send config frame
+        // 1. Send config frame (JSON, gzip-compressed)
         let req_json = json!({
             "user": { "uid": "chatbot_cli" },
             "request": {
@@ -110,17 +135,17 @@ impl Asr for DoubaoAsr {
             }
         });
 
-        let frame = build_ws_frame(&WS_FULL_CLIENT, &serde_json::to_vec(&req_json)?);
+        let frame = build_ws_frame(&WS_FULL_CLIENT, &serde_json::to_vec(&req_json)?, true);
         ws.send(WsMessage::Binary(frame)).await?;
 
-        // 2. Send audio segments
+        // 2. Send audio segments (raw PCM — gzip wouldn't compress, skip to save CPU)
         for chunk in wav_data.chunks(ASR_SEG_SIZE) {
-            let frame = build_ws_frame(&WS_AUDIO_ONLY, chunk);
+            let frame = build_ws_frame(&WS_AUDIO_ONLY, chunk, false);
             ws.send(WsMessage::Binary(frame)).await?;
         }
 
         // 3. Send end-of-audio frame
-        let finish = build_ws_frame(&WS_LAST_AUDIO, &[]);
+        let finish = build_ws_frame(&WS_LAST_AUDIO, &[], false);
         ws.send(WsMessage::Binary(finish)).await?;
 
         // 4. Read responses
@@ -156,6 +181,20 @@ impl Asr for DoubaoAsr {
     }
 }
 
+// 401 means bad creds — never retry. Connect/IO/timeout errors are worth one retry.
+fn is_transient_asr_error(e: &anyhow::Error) -> bool {
+    let msg = format!("{e}");
+    if msg.contains("HTTP 401") || msg.contains("Check app_id") {
+        return false;
+    }
+    msg.contains("HTTP 5")
+        || msg.contains("connection")
+        || msg.contains("Connection")
+        || msg.contains("timed out")
+        || msg.contains("reset")
+        || msg.contains("Io")
+}
+
 // === Internal helpers ===
 
 fn gzip_compress(data: &[u8]) -> Result<Vec<u8>> {
@@ -171,12 +210,19 @@ fn gzip_decompress(data: &[u8]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-fn build_ws_frame(header: &[u8; 4], raw_data: &[u8]) -> Vec<u8> {
-    let compressed = gzip_compress(raw_data).unwrap_or_else(|_| raw_data.to_vec());
-    let mut frame = Vec::with_capacity(4 + 4 + compressed.len());
+fn build_ws_frame(header: &[u8; 4], raw_data: &[u8], compress: bool) -> Vec<u8> {
+    let payload: std::borrow::Cow<'_, [u8]> = if compress {
+        match gzip_compress(raw_data) {
+            Ok(c) => std::borrow::Cow::Owned(c),
+            Err(_) => std::borrow::Cow::Borrowed(raw_data),
+        }
+    } else {
+        std::borrow::Cow::Borrowed(raw_data)
+    };
+    let mut frame = Vec::with_capacity(4 + 4 + payload.len());
     frame.extend_from_slice(header);
-    frame.extend_from_slice(&(compressed.len() as u32).to_be_bytes());
-    frame.extend_from_slice(&compressed);
+    frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    frame.extend_from_slice(&payload);
     frame
 }
 
