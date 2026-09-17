@@ -43,7 +43,7 @@
 ### Shell script (macOS / Linux)
 
 ```bash
-curl -fsSL https://chatbot.longye.site/install.sh | bash
+curl -fsSL https://chatbot.longye.dev/install.sh | bash
 ```
 
 Set `GITHUB_TOKEN` beforehand if you're hitting anonymous API rate limits (60 req/hr). Pin a version with `CB_VERSION=v0.1.0-beta.5 curl ... | bash`.
@@ -151,8 +151,8 @@ Downloads the latest release and replaces the binary in place. If the daemon is 
 ```
 packages/
   cli/        Rust — voice assistant binary (cb)
-  web/        Vite — promotional landing page (Vercel)
-  server/     Node.js — API server (Fly.io)
+  web/        Vite — landing page + install.sh (Cloudflare Workers static assets → chatbot.longye.dev)
+  server/     Bun + Fastify — API server (no deploy target yet)
 ```
 
 ### Voice Pipeline
@@ -178,18 +178,21 @@ Microphone → VAD → ASR (Doubao) → Wake Word Check → LLM (streaming)
 ## Development
 
 ```bash
-# Prerequisites: Rust, Node.js, pnpm
+# Prerequisites: Rust, Bun (https://bun.sh)
 
 # CLI
 cargo run --manifest-path packages/cli/Cargo.toml
 cargo run --manifest-path packages/cli/Cargo.toml -- --debug
 
 # Web + Server
-pnpm install
-pnpm dev            # server :7758 + web :3000
+bun install
+bun run dev         # server :7758 + web :3000
 
 # Quality checks
-pnpm verify         # lint + typecheck + test + build
+bun run verify      # lint + typecheck + test + build
+
+# Deploy landing page to Cloudflare (run `bunx wrangler login` once)
+bun run deploy:web
 ```
 
 ### Release
@@ -209,7 +212,7 @@ git push origin main v0.1.0-beta.5
 
 **What's NOT automatic**: the Homebrew Formula at [`Erchoc/homebrew-tap/Formula/cb.rb`](https://github.com/Erchoc/homebrew-tap/blob/master/Formula/cb.rb) must be updated manually after each release (bump `version` + 3 sha256 values from the new artifacts).
 
-**Plain commits to `main`** trigger CI and redeploy the Vercel web site (including the `install.sh` endpoint). They do *not* trigger releases.
+**Plain commits to `main`** trigger CI only. They do *not* trigger releases, and they do *not* deploy the web site — run `bun run deploy:web` to publish the landing page (including the `install.sh` endpoint) to Cloudflare at `chatbot.longye.dev`.
 
 ### Verifying install channels
 

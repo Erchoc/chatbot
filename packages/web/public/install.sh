@@ -2,7 +2,7 @@
 # Install the `cb` voice assistant from GitHub Releases.
 #
 # Usage:
-#   curl -fsSL https://chatbot.longye.site/install.sh | bash
+#   curl -fsSL https://chatbot.longye.dev/install.sh | bash
 #
 # Env overrides:
 #   CB_VERSION=v0.1.0-beta.3   Pin a specific release tag (default: newest)

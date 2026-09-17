@@ -151,7 +151,7 @@ cb --debug          # Enable debug logging
 - GitHub Actions CI: macOS (aarch64 + x86_64) + Linux (x86_64 + aarch64)
 - Release artifacts: `cb-{os}-{arch}` binary
 - Homebrew tap: `erchoc/tap/chatbot` formula pulls release binary
-- Install script: `curl https://chatbot.longye.site/install.sh | bash`
+- Install script: `curl https://chatbot.longye.dev/install.sh | bash`
 
 ### 7. Dependency Choices
 

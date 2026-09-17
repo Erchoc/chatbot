@@ -1,0 +1,9 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "chatbot-web",
+  "compatibility_date": "2026-09-01",
+  // 纯静态站：vite build 产物整目录当 assets 上传，install.sh 在 public/ 下会原样落到根路径
+  "assets": { "directory": "./dist" },
+  // 绑定自定义域名（longye.dev 需已托管在同一 Cloudflare 账号）
+  "routes": [{ "pattern": "chatbot.longye.dev", "custom_domain": true }]
+}

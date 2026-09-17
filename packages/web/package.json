@@ -5,12 +5,15 @@
   "scripts": {
     "dev": "vite --host",
     "build": "vite build",
+    "preview": "vite preview",
+    "deploy": "vite build && wrangler deploy",
     "typecheck": "echo 'static site, no TypeScript'",
     "test": "echo 'no tests'",
     "test:unit": "echo 'no tests'"
   },
   "devDependencies": {
     "typescript": "^5.0.0",
-    "vite": "^6.0.0"
+    "vite": "^6.0.0",
+    "wrangler": "^4.133.0"
   }
 }

@@ -60,7 +60,7 @@ WARN="${C_YELLOW}⚠${C_RESET}"
 
 # ── Config ─────────────────────────────────────────────────────────────────
 EXPECTED_VERSION="${EXPECTED_VERSION:-}"
-INSTALL_SH_URL="${INSTALL_SH_URL:-https://chatbot.longye.site/install.sh}"
+INSTALL_SH_URL="${INSTALL_SH_URL:-https://chatbot.longye.dev/install.sh}"
 NPM_PACKAGE="${NPM_PACKAGE:-@erchoc/chatbot}"
 BREW_TAP="${BREW_TAP:-erchoc/tap}"
 BREW_FORMULA="${BREW_FORMULA:-cb}"

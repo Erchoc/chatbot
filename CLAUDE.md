@@ -7,25 +7,28 @@ Monorepo with three packages:
 | Package | Tech | Purpose |
 |---------|------|---------|
 | `packages/cli` | Rust (tokio, cpal, clap) | Voice assistant CLI binary `cb` |
-| `packages/web` | Vite (static HTML) | Promotional landing page (Vercel) |
-| `packages/server` | Node.js | API server (Fly.io) |
+| `packages/web` | Vite (static HTML) | Landing page + `install.sh` → Cloudflare Workers static assets (`chatbot.longye.dev`) |
+| `packages/server` | Bun + Fastify | API server (no deploy target yet) |
+
+Toolchain: **Bun only** (workspaces + scripts + test runner). No pnpm, no mise, no fly. Rust via rustup.
 
 ## Quick Commands
 
 ```bash
 # CLI development
-pnpm cli              # cargo run (dev build)
-pnpm cli:debug        # cargo run -- --debug
-pnpm cli:build        # cargo build --release
+bun run cli           # cargo run (dev build)
+bun run cli:debug     # cargo run -- --debug
+bun run cli:build     # cargo build --release
 
 # Web
-pnpm --filter @chatbot/web dev    # Vite dev server on :3000
-pnpm --filter @chatbot/web build  # Build to packages/web/dist
+bun run dev:web       # Vite dev server on :3000
+bun run --filter @chatbot/web build   # Build to packages/web/dist
+bun run deploy:web    # vite build + wrangler deploy → chatbot.longye.dev
 
 # Quality
-pnpm lint              # Biome check
-pnpm typecheck         # tsc --noEmit across packages
-pnpm verify            # lint + typecheck + test + build
+bun run lint           # Biome check
+bun run typecheck      # tsc --noEmit across packages
+bun run verify         # lint + typecheck + test + build
 ```
 
 ## Architecture (packages/cli)
@@ -214,13 +217,19 @@ When wake word session is active, `threshold_scale = 0.8` (20% more sensitive).
 **Also**: added `cb update -f/--force` that (a) widens the resolver to include prereleases via `/releases?per_page=1` instead of `/releases/latest`, and (b) downloads regardless of comparison result. Lets beta追新 users roll forward without the stable-channel safety net.
 **Rule**: Never do string equality on version numbers. Semver has explicit precedence rules — use them, or at minimum compare parsed numeric tuples and treat `-suffix` as "older than same x.y.z without suffix".
 
+### 23. `.mise.toml` committed to repo → every fresh clone errors on `cd`
+**Symptom**: `mise ERROR Config files in ~/Github/chatbot/.mise.toml are not trusted` the moment anyone enters the directory, before running anything.
+**Root cause**: mise's shell hook auto-loads any `.mise.toml` it finds in the cwd, and refuses untrusted files by design. Committing the file pushes a per-machine trust prompt onto every collaborator and every CI checkout. It also silently made the project depend on mise for node/rust, even though nothing in the repo needed it.
+**Fix**: Delete `.mise.toml`, add `.mise.toml` / `mise.toml` to `.gitignore`. Toolchain declared via `packageManager: bun@x.y.z` in `package.json` (read by `oven-sh/setup-bun` in CI) and rustup for Rust.
+**Rule**: Never commit personal tool-version-manager config (`.mise.toml`, `.tool-versions`, `.nvmrc`-style files) unless the whole team has agreed on that manager. Declare the toolchain in the project's own manifest instead.
+
 ## Release Cadence (phased rollout)
 
 每次版本变更按三段式铺开，给追新用户和求稳用户不同节奏：
 
 | 阶段 | 时机 | 动作 | 触达的用户 |
 |------|------|------|-----------|
-| 1. curl | 立即 | `git push` 到 main（Vercel 自动部署 install.sh）+ tag 一个 prerelease（或让 curl 走 `CB_CHANNEL=any`） | 追新用户：`curl ... \| bash` 抓最新 release |
+| 1. curl | 立即 | `git push` 到 main + `bun run deploy:web` 把 install.sh 部署到 Cloudflare + tag 一个 prerelease（或让 curl 走 `CB_CHANNEL=any`） | 追新用户：`curl ... \| bash` 抓最新 release |
 | 2. 正式版 | 次日无反馈 | tag 稳定版（如 `v0.1.1`），推触发 release.yml → npm 同步发布 | `CB_CHANNEL=stable` 的 curl 用户 + `npm install -g @erchoc/chatbot` |
 | 3. brew | 正式版发布一周后无反馈 | 在 `Erchoc/homebrew-tap` 手动运行 `bump formulae` workflow（tool=cb） | `brew install erchoc/tap/cb` 的求稳用户 |
 
@@ -233,6 +242,7 @@ When wake word session is active, `threshold_scale = 0.8` (20% more sensitive).
 ## Rules
 
 - **Breaking changes after v1.0.0**: Any change that alters user-facing behavior, config format, file paths, or CLI interface must be confirmed with the user before proceeding.
+- **Toolchain**: bun only. Never add pnpm / npm lockfiles, `.mise.toml`, fly / Docker deploy config. Web deploys via `bun run deploy:web` (wrangler).
 - **Naming**: Always use `chatbot` (not chatbox). After any rename, run `grep -r` across the entire repo.
 - **Paths**: All user-facing paths use `~/.config/chatbot/`. Never use `dirs::config_dir()` or `dirs::data_local_dir()`.
 - **VAD tuning**: Never change more than one parameter at a time. Always test with keyboard typing.

@@ -11,12 +11,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v6
-        with: { version: 10.12.4, standalone: true }
-      - uses: actions/setup-node@v6
-        with: { node-version: 24, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm lint
-      - run: pnpm typecheck
-      - run: pnpm test
-      - run: pnpm build
+
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version-file: package.json }
+
+      # `bun run test` 会串上 cargo test，Linux 上 cpal 依赖 ALSA 头文件
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            packages/cli/target
+          key: ci-cargo-${{ hashFiles('packages/cli/Cargo.lock') }}
+          restore-keys: ci-cargo-
+      - name: Install ALSA dev
+        run: sudo apt-get install -y libasound2-dev
+
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun run test
+      - run: bun run build

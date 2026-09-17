@@ -7,3 +7,9 @@ packages/*/dist
 .env
 # Rust
 target/
+# 本机工具版本管理是个人偏好，不进仓库（提交后所有人 cd 进来都会被 mise trust 拦）
+.mise.toml
+mise.toml
+.mise.*.toml
+# wrangler 本地状态
+.wrangler/

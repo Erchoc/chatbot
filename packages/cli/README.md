@@ -12,7 +12,7 @@ A cross-platform voice assistant CLI that runs on macOS and Linux. Talk to an AI
 
 ```bash
 # One-line install (macOS & Linux)
-curl -fsSL https://chatbot.longye.site/install.sh | bash
+curl -fsSL https://chatbot.longye.dev/install.sh | bash
 
 # Build from source
 cd packages/cli && cargo install --path . --root ~/.local
@@ -108,9 +108,9 @@ Linux builds require `libasound2-dev`.
 
 ```bash
 # Run from project root
-pnpm cli              # Run (auto-compile + start)
-pnpm cli:debug        # Debug mode
-pnpm cli -- config    # Pass subcommands with --
+bun run cli              # Run (auto-compile + start)
+bun run cli:debug        # Debug mode
+bun run cli config       # Pass subcommands directly
 
 # Run from packages/cli
 cd packages/cli
@@ -132,7 +132,7 @@ cargo build --release
 
 ```bash
 # 一键安装（macOS & Linux）
-curl -fsSL https://chatbot.longye.site/install.sh | bash
+curl -fsSL https://chatbot.longye.dev/install.sh | bash
 
 # 从源码编译
 cd packages/cli && cargo install --path . --root ~/.local
@@ -228,9 +228,9 @@ Linux 编译需安装 `libasound2-dev`。
 
 ```bash
 # 根目录运行
-pnpm cli              # 运行（自动编译 + 启动）
-pnpm cli:debug        # 调试模式
-pnpm cli -- config    # 传子命令用 -- 分隔
+bun run cli              # 运行（自动编译 + 启动）
+bun run cli:debug        # 调试模式
+bun run cli config       # 子命令直接跟在后面
 
 # cli 目录下运行
 cd packages/cli
