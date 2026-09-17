@@ -15,7 +15,7 @@ use uuid::Uuid;
 use super::protocol::{self as p, MSG_AUDIO_ONLY, MSG_FULL_CLIENT, MSG_FULL_SERVER};
 use super::{auth_headers, credentials_hint, is_transient_error};
 use crate::config::DoubaoConfig;
-use crate::speech::Asr;
+use crate::speech::{Asr, AsrContext, Speaker};
 use crate::ui::theme::{MUTED, RESET};
 
 /// 每包音频 200ms @16kHz 16bit mono（官方推荐 100~200ms）。
@@ -43,11 +43,11 @@ impl DoubaoAsr {
 
 #[async_trait]
 impl Asr for DoubaoAsr {
-    async fn recognize(&self, wav_data: &[u8]) -> Result<(String, f32)> {
+    async fn recognize(&self, wav_data: &[u8], ctx: &AsrContext) -> Result<(String, f32)> {
         let t0 = Instant::now();
         let mut attempt = 0;
         loop {
-            match self.recognize_once(wav_data).await {
+            match self.recognize_once(wav_data, ctx).await {
                 Ok(text) => return Ok((text, t0.elapsed().as_secs_f32() * 1000.0)),
                 Err(e) if attempt < MAX_RETRIES && is_transient_error(&e) => {
                     attempt += 1;
@@ -61,7 +61,7 @@ impl Asr for DoubaoAsr {
 }
 
 impl DoubaoAsr {
-    async fn recognize_once(&self, wav_data: &[u8]) -> Result<String> {
+    async fn recognize_once(&self, wav_data: &[u8], ctx: &AsrContext) -> Result<String> {
         let request_id = Uuid::new_v4().to_string();
         self.debug(format!("ASR 2.0 -> {} resource={} req={request_id}", self.cfg.asr_url, self.cfg.asr_resource_id));
 
@@ -90,7 +90,7 @@ impl DoubaoAsr {
         })?;
 
         // 1. full client request（JSON + gzip）
-        let req = json!({
+        let mut req = json!({
             "user": { "uid": "chatbot_cli" },
             "audio": {
                 "format": "pcm",
@@ -109,6 +109,9 @@ impl DoubaoAsr {
                 "end_window_size": 800
             }
         });
+        if let Some(corpus) = build_corpus(ctx) {
+            req["request"]["corpus"] = corpus;
+        }
         let frame = p::encode(MSG_FULL_CLIENT, p::FLAG_NONE, p::SER_JSON, p::COMP_GZIP, &serde_json::to_vec(&req)?)?;
         ws.send(WsMessage::Binary(frame)).await?;
 
@@ -166,6 +169,42 @@ impl DoubaoAsr {
     }
 }
 
+/// 热词 + 最近对话 → `request.corpus.context`（服务端要求 JSON 序列化成字符串）。
+/// 文档：https://www.volcengine.com/docs/6561/2630027 「corpus」
+fn build_corpus(ctx: &AsrContext) -> Option<serde_json::Value> {
+    let hotwords: Vec<_> = ctx
+        .hotwords
+        .iter()
+        .map(|w| w.trim())
+        .filter(|w| !w.is_empty())
+        .map(|w| json!({ "word": w }))
+        .collect();
+    let dialog: Vec<_> = ctx
+        .dialog
+        .iter()
+        .filter(|t| !t.text.trim().is_empty())
+        .map(|t| {
+            let speaker = match t.speaker {
+                Speaker::User => "user",
+                Speaker::Bot => "bot",
+            };
+            json!({ "speaker": speaker, "text": t.text.chars().take(200).collect::<String>() })
+        })
+        .collect();
+    if hotwords.is_empty() && dialog.is_empty() {
+        return None;
+    }
+    let mut context = json!({});
+    if !hotwords.is_empty() {
+        context["hotwords"] = json!(hotwords);
+    }
+    if !dialog.is_empty() {
+        context["context_type"] = json!("dialog_ctx");
+        context["context_data"] = json!(dialog);
+    }
+    Some(json!({ "context": context.to_string() }))
+}
+
 /// 输入是 `encode_wav` 产出的 44 字节标准头 WAV；服务端要裸 PCM。
 fn strip_wav_header(data: &[u8]) -> &[u8] {
     if data.len() >= 44 && &data[..4] == b"RIFF" && &data[8..12] == b"WAVE" {
@@ -190,6 +229,25 @@ struct AsrResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn corpus_serializes_hotwords_and_dialog_as_json_string() {
+        use crate::speech::DialogTurn;
+        let ctx = AsrContext {
+            hotwords: vec!["小派".into(), " ".into()],
+            dialog: vec![
+                DialogTurn { speaker: Speaker::User, text: "你好".into() },
+                DialogTurn { speaker: Speaker::Bot, text: "嗨".into() },
+            ],
+        };
+        let corpus = build_corpus(&ctx).unwrap();
+        let inner: serde_json::Value =
+            serde_json::from_str(corpus["context"].as_str().unwrap()).unwrap();
+        assert_eq!(inner["hotwords"], json!([{ "word": "小派" }]));
+        assert_eq!(inner["context_type"], "dialog_ctx");
+        assert_eq!(inner["context_data"][1]["speaker"], "bot");
+        assert!(build_corpus(&AsrContext::default()).is_none());
+    }
 
     #[test]
     fn strips_riff_header_only_when_present() {

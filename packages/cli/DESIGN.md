@@ -83,6 +83,8 @@ packages/cli/
 - **语速**：用户面向的是倍率 `tts_speed`（0.5~2.0），发送前线性映射到接口的 `speech_rate`（-50~100）。
 - **音色**：仅 2.0 音色（`*_uranus_bigtts`）。1.0 的 `BV*` / `*_mars_bigtts` / `*_moon_bigtts` 在加载配置时自动迁移到最接近的 2.0 音色（`config::presets::migrate_voice`），复刻音色（`S_*`）不动。
 - **旧配置**：`tts_cluster`、`/api/v1/tts`、`volc.bigasr.*`、`volc.service_type.10029` 在 `DoubaoConfig::migrate_to_v2` 里静默升级，用户不需要重跑向导。
+- **识别语境**：每次识别带 `AsrContext`（热词：助手名 / 唤醒词；最近 6 条对话），映射到 `request.corpus.context`。
+- **合成语境**：`TtsOptions`：同一轮共用 `section_id`；`instruction`（`speech.doubao.voice_instruction`）+ 用户上一句拼成 `context_texts` 语音指令，缓存键含指令。
 - **回环验证**：`cargo test --manifest-path packages/cli/Cargo.toml doubao_loopback -- --ignored --nocapture` 用真实凭证跑 TTS 2.0 → 解码 → ASR 2.0，断言识别回原句。
 
 ### 扩展点
@@ -117,12 +119,14 @@ app_id = "xxx"
 access_token = "xxx"
 asr_resource_id = "volc.seedasr.sauc.duration"
 tts_resource_id = "seed-tts-2.0"
-voice_type = "zh_female_vv_uranus_bigtts"
+voice_type = "zh_female_xiaohe_uranus_bigtts"   # 默认台湾腔小何 2.0
 tts_speed = 1.3
+voice_instruction = "用轻松自然、像朋友聊天一样的语气说，不要念稿"
 
 [audio]
 silence_seconds = 1.0
 min_speech_seconds = 1.0
+barge_in = true      # 助手说话时可打断
 ```
 
 所有路径统一 `~/.config/chatbot/`（不用 `dirs::config_dir()`，见 CLAUDE.md 错误记录 #11）。任何配置写入若守护进程在跑，都会触发重启（`cmd::config::save_and_reload`）。
@@ -144,6 +148,22 @@ audio::capture ──raw PCM──▶ audio::resample ──16k mono WAV──�
                                                                    │ reply + 指标
                                              storage::{history, events} 落盘
 ```
+
+### 打断（barge-in）
+
+```text
+speak_turn
+ ├─ 播放线程（PlayerState.stop 每 20ms 轮询，sink.stop() 立刻静音；开播一句就打印一句）
+ ├─ LLM task ─▶ 分句 dispatcher ─▶ 并发 TTS ─▶ 有序 forwarder ─▶ 播放队列
+ └─ 监听线程 listen_for_barge_in：
+      播放前 0.7s 学回声电平 → 门限 = max(基础×2.0, 回声×2.2)（静音期 基础×1.2）
+      73% 滑窗触发 → triggered=true → 继续录到静音 → 返回用户那句
+tokio::select! { 播放器退出 ⇒ 正常结束 | triggered ⇒ 打断 }
+打断：stop 播放、abort LLM/dispatcher/forwarder；已说出口的句子 +「被打断」进上下文；
+      录回来的音频作为下一轮输入（跳过"等人开口"），唤醒态续期。
+```
+
+没有回声消除：靠"用户声音要盖过扬声器回声"这一条件，笔记本外放时需要正常音量说话，戴耳机最准。`audio.barge_in = false` 可关闭。
 
 ## 6. 跨平台与发布
 

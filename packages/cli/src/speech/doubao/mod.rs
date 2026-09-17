@@ -57,7 +57,7 @@ mod loopback {
     use crate::audio::resample::{downsample_to_mono_16k, encode_wav};
     use crate::audio::DeviceInfo;
     use crate::config::AppConfig;
-    use crate::speech::{Asr, Tts};
+    use crate::speech::{Asr, AsrContext, Tts, TtsOptions};
     use rodio::{Decoder, Source};
     use std::io::Cursor;
 
@@ -70,7 +70,14 @@ mod loopback {
 
         let tts = DoubaoTts::new(client, cfg.speech.doubao.clone());
         let mp3 = tts
-            .synthesize("你好，今天天气怎么样？")
+            .synthesize(
+                "你好，今天天气怎么样？",
+                &TtsOptions {
+                    section_id: Some("loopback-test".into()),
+                    context_text: Some("我刚下班，好累".into()),
+                    instruction: Some(cfg.speech.doubao.voice_instruction.clone()),
+                },
+            )
             .await
             .expect("tts request")
             .expect("tts audio");
@@ -83,7 +90,8 @@ mod loopback {
         let wav = encode_wav(&mono16k).expect("wav");
 
         let asr = DoubaoAsr::new(cfg.speech.doubao.clone(), true);
-        let (text, ms) = asr.recognize(&wav).await.expect("asr");
+        let ctx = AsrContext { hotwords: vec!["天气".into()], dialog: vec![] };
+        let (text, ms) = asr.recognize(&wav, &ctx).await.expect("asr");
         eprintln!("ASR 2.0 => {text:?} ({ms:.0}ms)");
         assert!(text.contains("天气"), "unexpected asr text: {text:?}");
     }

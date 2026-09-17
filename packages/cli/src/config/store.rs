@@ -199,6 +199,9 @@ pub struct DoubaoConfig {
     /// 语速倍率 0.5 ~ 2.0（内部映射为接口的 speech_rate）
     #[serde(default = "default_tts_speed")]
     pub tts_speed: f64,
+    /// 语音指令（2.0 音色支持），控制整体语气；留空则不下发。
+    #[serde(default = "default_voice_instruction")]
+    pub voice_instruction: String,
     #[serde(default = "default_tts_url")]
     pub tts_url: String,
     #[serde(default = "default_asr_url")]
@@ -216,6 +219,9 @@ fn default_voice_type() -> String {
 }
 fn default_tts_speed() -> f64 {
     1.3
+}
+fn default_voice_instruction() -> String {
+    "用轻松自然、像朋友聊天一样的语气说，不要念稿".into()
 }
 fn default_tts_url() -> String {
     "https://openspeech.bytedance.com/api/v3/tts/unidirectional".into()
@@ -236,8 +242,23 @@ impl DoubaoConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioConfig {
+    #[serde(default = "default_silence_seconds")]
     pub silence_seconds: f32,
+    #[serde(default = "default_min_speech_seconds")]
     pub min_speech_seconds: f32,
+    /// 助手说话时允许用户开口打断（需要麦克风能盖过扬声器回声；戴耳机效果最好）。
+    #[serde(default = "default_barge_in")]
+    pub barge_in: bool,
+}
+
+fn default_silence_seconds() -> f32 {
+    1.0
+}
+fn default_min_speech_seconds() -> f32 {
+    1.0
+}
+fn default_barge_in() -> bool {
+    true
 }
 
 // ─── Legacy structs (migration only) ─────────────────────────────────────────
@@ -317,6 +338,7 @@ impl Default for DoubaoConfig {
             tts_resource_id: default_tts_resource_id(),
             voice_type: default_voice_type(),
             tts_speed: default_tts_speed(),
+            voice_instruction: default_voice_instruction(),
             tts_url: default_tts_url(),
             asr_url: default_asr_url(),
         }
@@ -326,8 +348,9 @@ impl Default for DoubaoConfig {
 impl Default for AudioConfig {
     fn default() -> Self {
         Self {
-            silence_seconds: 1.0,
-            min_speech_seconds: 1.0,
+            silence_seconds: default_silence_seconds(),
+            min_speech_seconds: default_min_speech_seconds(),
+            barge_in: default_barge_in(),
         }
     }
 }
@@ -459,6 +482,9 @@ impl AppConfig {
         if let Ok(v) = std::env::var("DOUBAO_VOICE_TYPE") {
             self.speech.doubao.voice_type = v;
         }
+        if let Ok(v) = std::env::var("DOUBAO_VOICE_INSTRUCTION") {
+            self.speech.doubao.voice_instruction = v;
+        }
         if let Ok(v) = std::env::var("DOUBAO_TTS_URL") {
             self.speech.doubao.tts_url = v;
         }
@@ -582,7 +608,7 @@ mod tests {
         assert_eq!(d.tts_resource_id, "seed-tts-2.0");
         assert!(d.tts_url.ends_with("/api/v3/tts/unidirectional"));
         assert!(d.asr_url.ends_with("/sauc/bigmodel_async"));
-        assert_eq!(d.voice_type, "zh_female_cancan_uranus_bigtts");
+        assert_eq!(d.voice_type, super::super::presets::DEFAULT_VOICE);
     }
 
     #[test]

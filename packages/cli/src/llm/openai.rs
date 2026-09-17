@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 use crate::config::LlmConfig;
 
 /// OpenAI-compatible streaming LLM client
+#[derive(Clone)]
 pub struct OpenAiClient {
     client: Client,
     cfg: LlmConfig,
@@ -27,11 +28,14 @@ impl OpenAiClient {
         Self { client, cfg }
     }
 
-    /// Stream a chat completion, sending each token via channel and printing to stdout
+    /// Stream a chat completion, sending each token via channel.
+    /// `echo` = true 时同时把 token 打到 stdout（纯文本模式）；语音模式下由播放器按句打印，
+    /// 让终端文字和语音进度对齐。
     pub async fn chat_stream(
         &self,
         messages: &[Value],
         token_tx: mpsc::UnboundedSender<String>,
+        echo: bool,
     ) -> Result<StreamResult> {
         let t0 = std::time::Instant::now();
         let mut ttft_ms = 0.0_f32;
@@ -99,8 +103,10 @@ impl OpenAiClient {
 
                 reply.push_str(&content);
                 tokens += 1;
-                print!("{content}");
-                std::io::stdout().flush()?;
+                if echo {
+                    print!("{content}");
+                    std::io::stdout().flush()?;
+                }
                 let _ = token_tx.send(content);
             }
         }

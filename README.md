@@ -31,6 +31,8 @@
 - Multi-LLM profile management — switch models on the fly
 - Background daemon mode — always listening, always ready
 - Sentence-level TTS streaming for natural response cadence
+- Barge-in: start talking while it speaks — it stops, listens, and picks up the thread
+- Context-aware ASR (hotwords + recent turns) and expressive TTS (Doubao 2.0 voice instructions), Taiwanese-accent voice by default
 - Smart VAD that ignores keyboard noise and fan hum
 - Self-updating binary with automatic daemon restart
 - Web dashboard for conversation history

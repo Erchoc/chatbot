@@ -53,7 +53,7 @@ pub async fn run_text(message: &str, _debug: bool) -> Result<()> {
 
     // Stream reply — use a dummy channel, just for stdout printing
     let (token_tx, _token_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    let result = llm.chat_stream(&messages, token_tx).await?;
+    let result = llm.chat_stream(&messages, token_tx, true).await?;
 
     println!();
     println!(

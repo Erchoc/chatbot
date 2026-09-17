@@ -213,6 +213,18 @@ pub fn show() -> Result<()> {
         cfg.speech.doubao.voice_type, voice_label
     );
     println!("   {MUTED}语速{RESET}      {}x", cfg.speech.doubao.tts_speed);
+    println!(
+        "   {MUTED}语气指令{RESET}  {}",
+        if cfg.speech.doubao.voice_instruction.trim().is_empty() {
+            format!("{MUTED}(无){RESET}")
+        } else {
+            cfg.speech.doubao.voice_instruction.clone()
+        }
+    );
+    println!(
+        "   {MUTED}打断{RESET}      {}",
+        if cfg.audio.barge_in { "开启（说话即可打断助手）" } else { "关闭" }
+    );
     println!("   {MUTED}TTS 资源{RESET}  {}", cfg.speech.doubao.tts_resource_id);
     println!("   {MUTED}ASR 资源{RESET}  {}", cfg.speech.doubao.asr_resource_id);
     println!("   {MUTED}TTS URL{RESET}   {}", cfg.speech.doubao.tts_url);
@@ -265,6 +277,14 @@ pub fn set(key: &str, value: &str) -> Result<()> {
         "speech.doubao.asr_resource_id" => cfg.speech.doubao.asr_resource_id = value.to_string(),
         "speech.doubao.tts_resource_id" => cfg.speech.doubao.tts_resource_id = value.to_string(),
         "speech.doubao.voice_type" => cfg.speech.doubao.voice_type = value.to_string(),
+        "speech.doubao.voice_instruction" => cfg.speech.doubao.voice_instruction = value.to_string(),
+        "audio.barge_in" => {
+            cfg.audio.barge_in = match value.to_ascii_lowercase().as_str() {
+                "true" | "on" | "1" | "yes" => true,
+                "false" | "off" | "0" | "no" => false,
+                _ => anyhow::bail!("audio.barge_in 只接受 true / false"),
+            }
+        }
         "speech.doubao.tts_url" => cfg.speech.doubao.tts_url = value.to_string(),
         "speech.doubao.asr_url" => cfg.speech.doubao.asr_url = value.to_string(),
         "speech.doubao.tts_speed" => {
@@ -287,8 +307,8 @@ pub fn set(key: &str, value: &str) -> Result<()> {
              可用: persona.name, persona.language, persona.wake_word.enabled, persona.wake_word.word,\n\
              speech.doubao.api_key, speech.doubao.app_id, speech.doubao.access_token,\n\
              speech.doubao.asr_resource_id, speech.doubao.tts_resource_id, speech.doubao.voice_type,\n\
-             speech.doubao.tts_url, speech.doubao.asr_url, speech.doubao.tts_speed,\n\
-             audio.silence_seconds, audio.min_speech_seconds"
+             speech.doubao.voice_instruction, speech.doubao.tts_url, speech.doubao.asr_url,\n\
+             speech.doubao.tts_speed, audio.silence_seconds, audio.min_speech_seconds, audio.barge_in"
         ),
     }
 
@@ -718,7 +738,7 @@ async fn wizard_voice(cfg: &mut AppConfig) -> Result<()> {
 
 /// Play a short TTS sample with the current voice config. Returns true on success.
 async fn preview_voice(cfg: &AppConfig) -> bool {
-    use crate::audio::playback::spawn_player;
+    use crate::audio::playback::{spawn_player, PlayItem, PlayerState};
 
     let name = &cfg.persona.name;
     let sample_text = match cfg.persona.language.as_str() {
@@ -729,16 +749,21 @@ async fn preview_voice(cfg: &AppConfig) -> bool {
     println!("   {BR_CYAN}♪ 试听中...{RESET}");
 
     let result = match crate::speech::build_tts(cfg) {
-        Ok(tts) => tts.synthesize(&sample_text).await,
+        Ok(tts) => {
+            let opts = crate::speech::TtsOptions {
+                instruction: Some(cfg.speech.doubao.voice_instruction.clone()),
+                ..Default::default()
+            };
+            tts.synthesize(&sample_text, &opts).await
+        }
         Err(e) => Err(e),
     };
 
     match result {
         Ok(Some(mp3)) => {
             let (tx, rx) = std::sync::mpsc::channel();
-            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let handle = spawn_player(rx, stop);
-            let _ = tx.send(mp3);
+            let handle = spawn_player(rx, PlayerState::new(), |_| {});
+            let _ = tx.send(PlayItem { text: sample_text.clone(), audio: mp3 });
             drop(tx);
             let _ = handle.join();
             println!("   {BR_GREEN}✓ 试听完成{RESET}");

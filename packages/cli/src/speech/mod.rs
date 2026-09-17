@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-pub use asr::Asr;
-pub use tts::Tts;
+pub use asr::{Asr, AsrContext, DialogTurn, Speaker};
+pub use tts::{Tts, TtsOptions};
 
 use crate::config::AppConfig;
 

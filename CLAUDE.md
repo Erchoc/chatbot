@@ -58,7 +58,10 @@ ui/                  theme · banner · spinner · select · art · i18n
 - **Color system**: `Color` struct with `Display` impl, gated by `init_colors()` (checks isatty + NO_COLOR + TERM=dumb)
 - **Wake word**: 2-pass matching (exact → pinyin) + 5-min active session + deactivation phrases
 - **Speech**: Doubao 2.0 only. `api_key`（新控制台）优先，否则 `app_id + access_token`。1.0 配置值（`BV*` 音色、`volc.bigasr.*`、`/api/v1/tts`、`tts_cluster`）在 `DoubaoConfig::migrate_to_v2` 自动升级
-- **TTS batching**: Sentence-end triggers synthesis, concurrent dispatch, sequential playback
+- **TTS batching**: Sentence-end triggers synthesis, concurrent dispatch, sequential playback; 终端文字**按句在开播时打印**（不再逐 token），文字和语音进度对齐
+- **ASR context**: 每次识别带热词（助手名、唤醒词）+ 最近 6 条对话（`request.corpus.context`），豆包 2.0 据此做上下文纠错
+- **TTS naturalness**: 同一轮所有句子共用 `section_id`，`context_texts` 下发语气指令（`speech.doubao.voice_instruction`）+ 承接用户上一句；默认音色台湾腔小何 2.0
+- **Barge-in**: 打断后把已说出口的半句标注「被打断」进上下文，录回来的用户语音直接作为下一轮输入
 - **Dashboard**: Embedded via `include_str!()`, served by raw TCP (no framework)
 - **Release**: macOS universal binary (lipo arm64+x86_64), Linux x86_64 + aarch64 (cross)
 
@@ -81,6 +84,12 @@ with gaps) peaks at ~40% and never triggers. The 0.6s window is long enough to
 reject percussive noise but short enough for responsive speech onset.
 
 When wake word session is active, `threshold_scale = 0.8` (20% more sensitive).
+
+**Barge-in（打断）**, `audio/capture.rs::listen_for_barge_in`：助手说话期间麦克风持续监听。
+没有回声消除，所以先用播放开头 `BARGE_IN_CALIB_CHUNKS=32`（≈0.7s）学扬声器回声电平，
+打断门限 = max(基础阈值 × `BARGE_IN_MIN_SCALE=2.0`, 回声 × `BARGE_IN_ECHO_SCALE=2.2`)；
+助手静音（LLM 思考 / 句间）时门限 = 基础阈值 × `BARGE_IN_QUIET_SCALE=1.2`。
+门控仍是同一个 73% 滑窗（`SpeechGate`），所以键盘声不会打断。戴耳机时回声≈0，打断最灵敏。
 
 ## Error Log (do NOT repeat these mistakes)
 
@@ -240,6 +249,18 @@ When wake word session is active, `threshold_scale = 0.8` (20% more sensitive).
 **Fix**: `DoubaoConfig` 全字段 `#[serde(default)]`（老文件缺新字段也能读），`migrate_to_v2()` 幂等升级资源 ID / URL / 音色，`presets::migrate_voice` 只动 1.0 形态的 ID、不碰复刻音色 `S_*`；`#[ignore]` 回环测试用真实凭证验证 TTS 2.0 → ASR 2.0。
 **Rule**: 任何外部协议 / 供应商版本切换，必须同 PR 交付三样东西：老值到新值的幂等迁移函数、用真实旧配置样本的单测、一个可手动跑的真实接口冒烟测试。
 
+### 26. 48k → 16k 用线性插值降采样，ASR 听到的是带混叠的音频
+**Symptom**: 用户反馈"识别成文字不太准"，尤其齿音多的句子和键盘声混入时。
+**Root cause**: `downsample_to_mono_16k` 是纯线性插值，没有低通。48kHz 里 8kHz 以上的成分（齿音、键盘、风扇高频）在抽取后折叠进 0~8kHz 语音频带，模型看到的频谱被污染。
+**Fix**: 改成面积平均重采样（等价 box 低通 + 抽取），单测验证 1kHz 保真、15kHz 衰减到 1/3 以下。同时给 ASR 带热词与对话上下文。
+**Rule**: 任何降采样都必须先低通再抽取。写重采样代码时用一个高于目标奈奎斯特频率的正弦做单测，衰减不明显就是没做对。
+
+### 27. 语音助手不能被打断，文字比语音快一大截
+**Symptom**: 助手说话时用户开口没反应，只能等它说完；终端一瞬间把整段回复打完，语音才慢慢开始，用户感觉"文字和声音是两个东西"。
+**Root cause**: 播放期间麦克风根本没开（录音 → 说话 严格串行）；播放器只在两段音频之间检查 stop 标志，一句 10 秒的音频中途停不下来；LLM 客户端直接把 token 打到 stdout。
+**Fix**: `speak_turn` 用 `tokio::select!` 同时等「播放器退出」和「打断触发」；播放器每 20ms 轮询 stop 并 `sink.stop()`；打断后 abort LLM/分句/转发任务，把用户那句录回来直接进下一轮；已说出口的半句标注「被打断」进上下文；文字改为每句开播时打印。
+**Rule**: 语音交互里"听"和"说"必须并发，任何阻塞在播放上的设计都会让用户觉得在跟录音机说话。可打断的播放器必须在音频内部轮询停止信号，不能只在边界检查。
+
 ## Release Cadence (phased rollout)
 
 每次版本变更按三段式铺开，给追新用户和求稳用户不同节奏：
@@ -304,3 +325,4 @@ When wake word session is active, `threshold_scale = 0.8` (20% more sensitive).
 - [x] 删除本地模型原型（faster-whisper / Kokoro）与豆包 1.0 Rust 原型，语音统一豆包 2.0
 - [x] 豆包 2.0：ASR `seedasr` 二遍识别 + TTS `seed-tts-2.0` HTTP 流式，新旧控制台鉴权并存，老配置自动迁移，真实凭证回环测试通过
 - [x] CLI 分层重构：cmd / pipeline / domain / speech·llm·audio·config·storage·platform / ui，`domain` 零 IO 33 个单测
+- [x] 识别准确率：抗混叠降采样 + ASR 热词/对话上下文；说话可打断（无 AEC，靠回声电平自适应门限）；文字按句与语音同步；TTS 段落 ID + 语气指令，默认台湾腔小何 2.0

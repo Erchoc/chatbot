@@ -19,7 +19,7 @@ use uuid::Uuid;
 use super::{auth_headers, credentials_hint, is_transient_error};
 use crate::config::{cache_path, DoubaoConfig};
 use crate::domain::sentence::is_speakable;
-use crate::speech::Tts;
+use crate::speech::{Tts, TtsOptions};
 use crate::ui::theme::{MUTED, RESET};
 
 const MAX_RETRIES: u32 = 1;
@@ -39,13 +39,14 @@ impl DoubaoTts {
 
 #[async_trait]
 impl Tts for DoubaoTts {
-    async fn synthesize(&self, text: &str) -> Result<Option<Vec<u8>>> {
+    async fn synthesize(&self, text: &str, opts: &TtsOptions) -> Result<Option<Vec<u8>>> {
         // 太短的片段（"。"、"呢"）引擎会 500，直接跳过
         if !is_speakable(text) {
             return Ok(None);
         }
 
-        let cache_file = tts_cache_path(text, &self.cfg.voice_type, self.cfg.tts_speed);
+        let instruction = build_instruction(opts);
+        let cache_file = tts_cache_path(text, &self.cfg.voice_type, self.cfg.tts_speed, &instruction);
         if let Ok(bytes) = std::fs::read(&cache_file) {
             if !bytes.is_empty() {
                 return Ok(Some(bytes));
@@ -54,7 +55,7 @@ impl Tts for DoubaoTts {
 
         let mut attempt = 0;
         loop {
-            match self.synthesize_once(text).await {
+            match self.synthesize_once(text, opts, &instruction).await {
                 Ok(audio) => {
                     write_cache(&cache_file, &audio);
                     return Ok(Some(audio));
@@ -81,8 +82,20 @@ struct TtsChunk {
 }
 
 impl DoubaoTts {
-    async fn synthesize_once(&self, text: &str) -> Result<Vec<u8>> {
+    async fn synthesize_once(&self, text: &str, opts: &TtsOptions, instruction: &str) -> Result<Vec<u8>> {
         let request_id = Uuid::new_v4().to_string();
+        // LLM 偶尔漏出 markdown / emoji，让服务端过滤掉别念出来；
+        // section_id 让同一轮的多句共享语境；context_texts 是 2.0 的语音指令。
+        let mut additions = json!({
+            "disable_markdown_filter": true,
+            "disable_emoji_filter": true
+        });
+        if let Some(sid) = &opts.section_id {
+            additions["section_id"] = json!(sid);
+        }
+        if !instruction.is_empty() {
+            additions["context_texts"] = json!([instruction]);
+        }
         let body = json!({
             "user": { "uid": "chatbot_cli" },
             "req_params": {
@@ -93,11 +106,7 @@ impl DoubaoTts {
                     "sample_rate": SAMPLE_RATE,
                     "speech_rate": speech_rate_from_ratio(self.cfg.tts_speed)
                 },
-                // LLM 偶尔漏出 markdown / emoji，让服务端过滤掉别念出来
-                "additions": json!({
-                    "disable_markdown_filter": true,
-                    "disable_emoji_filter": true
-                }).to_string()
+                "additions": additions.to_string()
             }
         });
 
@@ -166,11 +175,25 @@ pub fn speech_rate_from_ratio(ratio: f64) -> i32 {
     (((ratio - 1.0) * 100.0).round() as i32).clamp(-50, 100)
 }
 
-fn tts_cache_path(text: &str, voice: &str, speed: f64) -> PathBuf {
+/// 语音指令 = 用户配置的风格 + 承接上文的提示（上文截断，避免指令过长）。
+fn build_instruction(opts: &TtsOptions) -> String {
+    let mut s = opts.instruction.clone().unwrap_or_default().trim().to_string();
+    if let Some(ctx) = opts.context_text.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+        let short: String = ctx.chars().take(60).collect();
+        if !s.is_empty() {
+            s.push('，');
+        }
+        s.push_str(&format!("这句是在回应对方刚说的「{short}」，语气要承接上文"));
+    }
+    s
+}
+
+fn tts_cache_path(text: &str, voice: &str, speed: f64, instruction: &str) -> PathBuf {
     let mut h = DefaultHasher::new();
     text.hash(&mut h);
     voice.hash(&mut h);
     speed.to_bits().hash(&mut h);
+    instruction.hash(&mut h);
     cache_path(&format!("cache/tts/{:016x}.mp3", h.finish()))
 }
 
@@ -200,11 +223,26 @@ mod tests {
     }
 
     #[test]
-    fn cache_key_changes_with_voice_and_speed() {
-        let a = tts_cache_path("你好", "v1", 1.0);
-        let b = tts_cache_path("你好", "v2", 1.0);
-        let c = tts_cache_path("你好", "v1", 1.5);
+    fn cache_key_changes_with_voice_speed_and_instruction() {
+        let a = tts_cache_path("你好", "v1", 1.0, "");
+        let b = tts_cache_path("你好", "v2", 1.0, "");
+        let c = tts_cache_path("你好", "v1", 1.5, "");
+        let d = tts_cache_path("你好", "v1", 1.0, "温柔");
         assert_ne!(a, b);
         assert_ne!(a, c);
+        assert_ne!(a, d);
+    }
+
+    #[test]
+    fn instruction_combines_style_and_context() {
+        let none = build_instruction(&TtsOptions::default());
+        assert!(none.is_empty());
+        let full = build_instruction(&TtsOptions {
+            instruction: Some("自然地说".into()),
+            context_text: Some("  今天心情不好 ".into()),
+            section_id: None,
+        });
+        assert!(full.starts_with("自然地说，"));
+        assert!(full.contains("「今天心情不好」"));
     }
 }

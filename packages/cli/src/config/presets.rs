@@ -40,15 +40,15 @@ pub struct VoicePreset {
     pub zh_only: bool,
 }
 
-/// 默认音色：Vivi 2.0（通用女声，支持粤语/上海/四川等 8 种方言与多语种）。
-pub const DEFAULT_VOICE: &str = "zh_female_vv_uranus_bigtts";
+/// 默认音色：小何 2.0 —— 1.0「湾湾小何」（台湾口音）的 2.0 版本，官方迁移表如此对应。
+pub const DEFAULT_VOICE: &str = "zh_female_xiaohe_uranus_bigtts";
 
 /// 豆包语音合成模型 2.0 音色（`seed-tts-2.0`）。
 /// 全量列表：https://www.volcengine.com/docs/6561/1257544
 pub const DOUBAO_VOICES: &[VoicePreset] = &[
     // ── 通用 ──────────────────────────────────────────────────────────────
+    VoicePreset { id: "zh_female_xiaohe_uranus_bigtts", name: "小何", style: "台湾腔·女声", zh_only: false },
     VoicePreset { id: "zh_female_vv_uranus_bigtts", name: "Vivi", style: "通用·女声", zh_only: false },
-    VoicePreset { id: "zh_female_xiaohe_uranus_bigtts", name: "小何", style: "温柔·女声", zh_only: false },
     VoicePreset { id: "zh_female_cancan_uranus_bigtts", name: "知性灿灿", style: "知性·女声", zh_only: false },
     VoicePreset { id: "zh_female_tianmeitaozi_uranus_bigtts", name: "甜美桃子", style: "甜美·女声", zh_only: false },
     VoicePreset { id: "zh_female_shuangkuaisisi_uranus_bigtts", name: "爽快思思", style: "爽快·女声", zh_only: true },
@@ -68,9 +68,12 @@ pub const DOUBAO_VOICES: &[VoicePreset] = &[
 ];
 
 /// 1.0 音色 → 最接近的 2.0 音色。
+/// `BV700_V2_streaming` 是 1.0 时代的出厂默认，绝大多数用户并没有主动选它，
+/// 所以它跟着新默认走（台湾腔小何），而不是机械地换成灿灿 2.0。
 const LEGACY_VOICE_MAP: &[(&str, &str)] = &[
-    ("BV700_V2_streaming", "zh_female_cancan_uranus_bigtts"),
+    ("BV700_V2_streaming", DEFAULT_VOICE),
     ("BV700_streaming", "zh_female_cancan_uranus_bigtts"),
+    ("zh_female_wanwanxiaohe_moon_bigtts", "zh_female_xiaohe_uranus_bigtts"),
     ("BV405_streaming", "zh_female_tianmeitaozi_uranus_bigtts"),
     ("BV406_V2_streaming", "zh_female_xiaohe_uranus_bigtts"),
     ("BV409_streaming", "zh_female_tvbnv_uranus_bigtts"),
@@ -110,7 +113,8 @@ mod tests {
 
     #[test]
     fn migrates_known_and_unknown_v1_voices() {
-        assert_eq!(migrate_voice("BV700_V2_streaming"), Some("zh_female_cancan_uranus_bigtts"));
+        assert_eq!(migrate_voice("BV700_V2_streaming"), Some(DEFAULT_VOICE));
+        assert_eq!(migrate_voice("BV406_V2_streaming"), Some("zh_female_xiaohe_uranus_bigtts"));
         assert_eq!(migrate_voice("BV999_streaming"), Some(DEFAULT_VOICE));
         assert_eq!(migrate_voice("zh_female_xxx_mars_bigtts"), Some(DEFAULT_VOICE));
     }

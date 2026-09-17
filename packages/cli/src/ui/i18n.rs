@@ -17,6 +17,7 @@ pub struct Messages {
     pub stt_failed: &'static str,
     pub chat_failed: &'static str,
     pub goodbye: &'static str,
+    pub interrupted: &'static str,
 }
 
 pub const EN: Messages = Messages {
@@ -41,6 +42,7 @@ pub const EN: Messages = Messages {
     stt_failed: "Speech recognition failed",
     chat_failed: "Chat failed",
     goodbye: "See you next time!",
+    interrupted: "Interrupted, listening...",
 };
 
 pub const ZH: Messages = Messages {
@@ -65,6 +67,7 @@ pub const ZH: Messages = Messages {
     stt_failed: "语音识别失败",
     chat_failed: "对话失败",
     goodbye: "下次再聊！",
+    interrupted: "已打断，你说",
 };
 
 pub fn get(language: &str) -> &'static Messages {
