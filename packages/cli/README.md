@@ -38,7 +38,7 @@ cb config show
 
 # Set a config value directly
 cb config set llm.model deepseek-chat
-cb config set speech.doubao.voice_type BV700_V2_streaming
+cb config set speech.doubao.voice_type zh_female_vv_uranus_bigtts
 
 # Open local web dashboard
 cb open
@@ -59,7 +59,8 @@ Config file: `~/.config/chatbot/config.toml`. Run `cb config` for the interactiv
 | AI_API_KEY | llm.profiles[].api_key | LLM API key |
 | AI_BASE_URL | llm.profiles[].base_url | LLM service URL |
 | AI_MODEL | llm.profiles[].model | Model name |
-| DOUBAO_APP_ID | speech.doubao.app_id | Doubao App ID |
+| DOUBAO_API_KEY | speech.doubao.api_key | Doubao API Key (new console; replaces App ID + token) |
+| DOUBAO_APP_ID | speech.doubao.app_id | Doubao App ID (legacy console) |
 | DOUBAO_ACCESS_TOKEN | speech.doubao.access_token | Doubao token |
 | DOUBAO_VOICE_TYPE | speech.doubao.voice_type | TTS voice type |
 
@@ -82,15 +83,17 @@ See [DESIGN.md](./DESIGN.md) for the full architecture document.
 
 ```
 src/
-├── main.rs         # CLI entry (clap)
-├── cmd/            # Subcommands: chat, config, install, open
-├── audio/          # Audio capture, playback, resampling
-├── speech/         # Speech service abstraction (trait Asr/Tts) + Doubao impl
-├── llm/            # OpenAI-compatible streaming client
-├── config/         # TOML config + env var fallback + multi-profile LLM
-├── pipeline/       # Voice chat orchestration (audio→ASR→LLM→TTS→playback)
-├── log/            # Structured event logging (JSONL, per-file rotation)
-└── ui/             # Terminal UI: spinner, arrow-key selector, theme
+├── main.rs / cli.rs   # Process entry + clap contract
+├── cmd/               # Interface layer: chat, config, daemon, logs, open, update
+├── pipeline/          # Application layer: voice loop + one-turn speak (LLM → sentences → TTS → play)
+├── domain/            # Pure logic, zero IO: wake word, sentence split, metrics, semver, health
+├── speech/            # trait Asr/Tts + factory; doubao/ (v3 protocol, ASR 2.0, TTS 2.0)
+├── llm/               # OpenAI-compatible streaming client
+├── audio/             # Capture + VAD, playback, resampling
+├── config/            # TOML store + migration + env, presets (LLM / voices)
+├── storage/           # Conversation history (JSON), event log (JSONL)
+├── platform/          # launchd/systemd primitives, desktop notify, update check
+└── ui/                # Theme, banner, spinner, selector, i18n
 ```
 
 ### Cross-platform Support
@@ -158,7 +161,7 @@ cb config show
 
 # 直接设置配置项
 cb config set llm.model deepseek-chat
-cb config set speech.doubao.voice_type BV700_V2_streaming
+cb config set speech.doubao.voice_type zh_female_vv_uranus_bigtts
 
 # 打开本地网页控制台
 cb open
@@ -179,7 +182,8 @@ cb --debug
 | AI_API_KEY | llm.profiles[].api_key | LLM API Key |
 | AI_BASE_URL | llm.profiles[].base_url | LLM 服务地址 |
 | AI_MODEL | llm.profiles[].model | 模型名称 |
-| DOUBAO_APP_ID | speech.doubao.app_id | 豆包 App ID |
+| DOUBAO_API_KEY | speech.doubao.api_key | 豆包 API Key（新版控制台，填了就不需要 App ID + Token） |
+| DOUBAO_APP_ID | speech.doubao.app_id | 豆包 App ID（旧版控制台） |
 | DOUBAO_ACCESS_TOKEN | speech.doubao.access_token | 豆包 Token |
 | DOUBAO_VOICE_TYPE | speech.doubao.voice_type | TTS 音色 |
 
@@ -202,15 +206,17 @@ cb --debug
 
 ```
 src/
-├── main.rs         # CLI 入口 (clap)
-├── cmd/            # 子命令：chat, config, install, open
-├── audio/          # 音频采集、播放、重采样
-├── speech/         # 语音服务抽象 (trait Asr/Tts) + 豆包实现
-├── llm/            # OpenAI 兼容流式客户端
-├── config/         # TOML 配置 + 环境变量 + 多 LLM Profile
-├── pipeline/       # 语音对话编排 (audio→ASR→LLM→TTS→playback)
-├── log/            # 结构化事件日志（JSONL 分文件轮转）
-└── ui/             # 终端 UI：spinner、箭头选择器、主题色
+├── main.rs / cli.rs   # 进程入口 + clap 参数契约
+├── cmd/               # 接口层：chat, config, daemon, logs, open, update
+├── pipeline/          # 应用层：语音主循环 + 一轮对话（LLM → 分句 → TTS → 播放）
+├── domain/            # 领域层，零 IO：唤醒词、分句、指标、semver、健康规则
+├── speech/            # trait Asr/Tts + 工厂；doubao/（v3 协议、识别 2.0、合成 2.0）
+├── llm/               # OpenAI 兼容流式客户端
+├── audio/             # 采集 + VAD、播放、重采样
+├── config/            # TOML 存储 + 迁移 + 环境变量，预设（LLM / 音色）
+├── storage/           # 对话历史（JSON）、事件日志（JSONL）
+├── platform/          # launchd/systemd 原语、桌面通知、版本检查
+└── ui/                # 主题、横幅、spinner、选择器、i18n
 ```
 
 ### 跨平台支持

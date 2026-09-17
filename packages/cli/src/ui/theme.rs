@@ -1,3 +1,5 @@
+//! 调色板按完整 ANSI 集合定义，未用到的颜色保留作为公共素材。
+#![allow(dead_code)]
 // Terminal color/style constants.
 //
 // Each constant is a `Color` newtype that implements `Display`.

@@ -1,20 +1,30 @@
+//! 豆包语音合成模型 2.0（HTTP chunked v3，`tts/unidirectional`）。
+//!
+//! 一次请求一句话：POST JSON，响应是按行分隔的 JSON 流，每行 `data` 是 base64 音频片段，
+//! 拼起来就是完整 mp3。命中磁盘缓存（`cache/tts/<hash>.mp3`）时 0 延迟。
+//! 文档：<https://www.volcengine.com/docs/6561/2528925>
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde::Deserialize;
+use serde_json::json;
 use uuid::Uuid;
 
+use super::{auth_headers, credentials_hint, is_transient_error};
 use crate::config::{cache_path, DoubaoConfig};
+use crate::domain::sentence::is_speakable;
 use crate::speech::Tts;
-
 use crate::ui::theme::{MUTED, RESET};
 
 const MAX_RETRIES: u32 = 1;
+const AUDIO_FORMAT: &str = "mp3";
+const SAMPLE_RATE: u32 = 24_000;
 
 pub struct DoubaoTts {
     client: Client,
@@ -30,14 +40,8 @@ impl DoubaoTts {
 #[async_trait]
 impl Tts for DoubaoTts {
     async fn synthesize(&self, text: &str) -> Result<Option<Vec<u8>>> {
-        // Skip empty or very short text — the TTS engine returns 500
-        // ("Init Engine Instance failed") on fragments like "。" or "呢"
-        let meaningful: usize = text
-            .trim()
-            .chars()
-            .filter(|c| c.is_alphanumeric())
-            .count();
-        if meaningful < 2 {
+        // 太短的片段（"。"、"呢"）引擎会 500，直接跳过
+        if !is_speakable(text) {
             return Ok(None);
         }
 
@@ -48,121 +52,118 @@ impl Tts for DoubaoTts {
             }
         }
 
-        let mut attempt: u32 = 0;
+        let mut attempt = 0;
         loop {
             match self.synthesize_once(text).await {
-                Ok(Some(mp3)) => {
-                    write_cache(&cache_file, &mp3);
-                    return Ok(Some(mp3));
+                Ok(audio) => {
+                    write_cache(&cache_file, &audio);
+                    return Ok(Some(audio));
                 }
-                Ok(None) => return Ok(None),
-                Err(e) => {
-                    if attempt >= MAX_RETRIES || !is_transient_tts_error(&e) {
-                        return Err(e);
-                    }
+                Err(e) if attempt < MAX_RETRIES && is_transient_error(&e) => {
                     attempt += 1;
-                    tokio::time::sleep(tokio::time::Duration::from_millis(500 * attempt as u64))
-                        .await;
+                    tokio::time::sleep(Duration::from_millis(500 * attempt as u64)).await;
                 }
+                Err(e) => return Err(e),
             }
         }
     }
 }
 
+/// 每行一个 JSON 对象；`code` 0 为成功，`data` 为 base64 音频。
+#[derive(Debug, Deserialize)]
+struct TtsChunk {
+    #[serde(default)]
+    code: i64,
+    #[serde(default)]
+    message: String,
+    #[serde(default)]
+    data: Option<String>,
+}
+
 impl DoubaoTts {
-    async fn synthesize_once(&self, text: &str) -> Result<Option<Vec<u8>>> {
+    async fn synthesize_once(&self, text: &str) -> Result<Vec<u8>> {
+        let request_id = Uuid::new_v4().to_string();
         let body = json!({
-            "app": {
-                "appid": self.cfg.app_id,
-                "token": self.cfg.access_token,
-                "cluster": self.cfg.tts_cluster
-            },
             "user": { "uid": "chatbot_cli" },
-            "audio": {
-                "voice_type": self.cfg.voice_type,
-                "encoding": "mp3",
-                "speed_ratio": self.cfg.tts_speed,
-                "volume_ratio": 1.0,
-                "pitch_ratio": 1.0
-            },
-            "request": {
-                "reqid": Uuid::new_v4().to_string(),
+            "req_params": {
                 "text": text,
-                "text_type": "plain",
-                "operation": "query"
+                "speaker": self.cfg.voice_type,
+                "audio_params": {
+                    "format": AUDIO_FORMAT,
+                    "sample_rate": SAMPLE_RATE,
+                    "speech_rate": speech_rate_from_ratio(self.cfg.tts_speed)
+                },
+                // LLM 偶尔漏出 markdown / emoji，让服务端过滤掉别念出来
+                "additions": json!({
+                    "disable_markdown_filter": true,
+                    "disable_emoji_filter": true
+                }).to_string()
             }
         });
 
-        let resp = self
+        let mut req = self
             .client
             .post(&self.cfg.tts_url)
             .header("Content-Type", "application/json")
-            .header(
-                "Authorization",
-                format!("Bearer;{}", self.cfg.access_token),
-            )
-            .header("X-Api-App-Key", &self.cfg.app_id)
-            .header("X-Api-Access-Key", &self.cfg.access_token)
             .header("X-Api-Resource-Id", &self.cfg.tts_resource_id)
-            .json(&body)
-            .send()
-            .await?;
+            .header("X-Api-Request-Id", &request_id);
+        for (k, v) in auth_headers(&self.cfg) {
+            req = req.header(k, v);
+        }
+        let resp = req.json(&body).send().await.context("TTS request failed")?;
 
         let status = resp.status();
-        let result: Value = match resp.json().await {
-            Ok(v) => v,
-            Err(e) => {
-                // Non-JSON 5xx — signal transient so the retry wrapper can decide.
-                if status.is_server_error() {
-                    anyhow::bail!("TTS HTTP {status} (body not JSON: {e})");
-                }
-                eprintln!("   {MUTED}TTS response not JSON: {e}{RESET}");
-                return Ok(None);
-            }
-        };
+        let logid = resp
+            .headers()
+            .get("x-tt-logid")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("-")
+            .to_string();
+        let raw = resp.bytes().await.context("TTS read body failed")?;
 
         if !status.is_success() {
-            let msg = result
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("unknown");
-            if status == reqwest::StatusCode::UNAUTHORIZED {
-                eprintln!("   {MUTED}TTS request failed: HTTP {status} - {msg}{RESET}");
-                if msg.contains("load grant") {
-                    eprintln!(
-                        "   {MUTED}Hint: TTS 授权缺失或参数不匹配，请检查 app_id/access_token/tts_resource_id 是否同属一个语音应用{RESET}"
-                    );
+            let snippet = String::from_utf8_lossy(&raw[..raw.len().min(300)]).to_string();
+            if status.as_u16() == 401 || status.as_u16() == 403 {
+                anyhow::bail!("TTS HTTP {status} (x-tt-logid={logid})：{}\n{snippet}", credentials_hint());
+            }
+            anyhow::bail!("TTS HTTP {status} (x-tt-logid={logid}) {snippet}");
+        }
+
+        let mut audio = Vec::new();
+        for line in String::from_utf8_lossy(&raw).lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let chunk: TtsChunk = match serde_json::from_str(line) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("   {MUTED}TTS 响应行无法解析: {e} ({}...){RESET}", &line[..line.len().min(80)]);
+                    continue;
                 }
-                return Ok(None);
+            };
+            if chunk.code != 0 && chunk.code != 20_000_000 {
+                anyhow::bail!(
+                    "TTS error code={} msg={} (x-tt-logid={logid})",
+                    chunk.code,
+                    chunk.message
+                );
             }
-            if status.is_server_error() {
-                anyhow::bail!("TTS HTTP {status} - {msg}");
+            if let Some(b64) = chunk.data.filter(|d| !d.is_empty()) {
+                audio.extend_from_slice(&B64.decode(b64).context("TTS audio base64 decode failed")?);
             }
-            eprintln!("   {MUTED}TTS request failed: HTTP {status} - {msg}{RESET}");
-            return Ok(None);
         }
-
-        let code = result.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
-        if code != 3000 {
-            let msg = result
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("unknown");
-            eprintln!("   {MUTED}TTS response: code={code} msg={msg}{RESET}");
-            return Ok(None);
+        if audio.is_empty() {
+            anyhow::bail!("TTS 返回空音频 (x-tt-logid={logid})");
         }
-
-        let audio_b64 = match result.get("data").and_then(|d| d.as_str()) {
-            Some(d) => d,
-            None => {
-                eprintln!("   {MUTED}TTS response missing 'data' field{RESET}");
-                return Ok(None);
-            }
-        };
-
-        let mp3_bytes = B64.decode(audio_b64)?;
-        Ok(Some(mp3_bytes))
+        Ok(audio)
     }
+}
+
+/// 用户面向的语速是倍率（0.5 ~ 2.0），2.0 接口要 `speech_rate` 整数：
+/// `100` = 2 倍速，`-50` = 0.5 倍速，`0` = 原速，线性映射。
+pub fn speech_rate_from_ratio(ratio: f64) -> i32 {
+    (((ratio - 1.0) * 100.0).round() as i32).clamp(-50, 100)
 }
 
 fn tts_cache_path(text: &str, voice: &str, speed: f64) -> PathBuf {
@@ -170,35 +171,40 @@ fn tts_cache_path(text: &str, voice: &str, speed: f64) -> PathBuf {
     text.hash(&mut h);
     voice.hash(&mut h);
     speed.to_bits().hash(&mut h);
-    let hex = format!("{:016x}", h.finish());
-    cache_path(&format!("cache/tts/{hex}.mp3"))
+    cache_path(&format!("cache/tts/{:016x}.mp3", h.finish()))
 }
 
-fn write_cache(path: &PathBuf, bytes: &[u8]) {
-    let Some(parent) = path.parent() else {
-        return;
-    };
+fn write_cache(path: &Path, bytes: &[u8]) {
+    let Some(parent) = path.parent() else { return };
     if std::fs::create_dir_all(parent).is_err() {
         return;
     }
-    let tmp = parent.join(format!(
-        ".tmp-{}",
-        Uuid::new_v4().simple()
-    ));
+    let tmp = parent.join(format!(".tmp-{}", Uuid::new_v4().simple()));
     if std::fs::write(&tmp, bytes).is_ok() {
         let _ = std::fs::rename(&tmp, path);
     }
 }
 
-fn is_transient_tts_error(e: &anyhow::Error) -> bool {
-    let msg = format!("{e}");
-    if msg.contains("HTTP 401") {
-        return false;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn speech_rate_mapping() {
+        assert_eq!(speech_rate_from_ratio(1.0), 0);
+        assert_eq!(speech_rate_from_ratio(1.3), 30);
+        assert_eq!(speech_rate_from_ratio(2.0), 100);
+        assert_eq!(speech_rate_from_ratio(0.5), -50);
+        assert_eq!(speech_rate_from_ratio(3.0), 100);
+        assert_eq!(speech_rate_from_ratio(0.1), -50);
     }
-    msg.contains("HTTP 5")
-        || msg.contains("connection")
-        || msg.contains("Connection")
-        || msg.contains("timed out")
-        || msg.contains("reset")
-        || msg.contains("dns")
+
+    #[test]
+    fn cache_key_changes_with_voice_and_speed() {
+        let a = tts_cache_path("你好", "v1", 1.0);
+        let b = tts_cache_path("你好", "v2", 1.0);
+        let c = tts_cache_path("你好", "v1", 1.5);
+        assert_ne!(a, b);
+        assert_ne!(a, c);
+    }
 }

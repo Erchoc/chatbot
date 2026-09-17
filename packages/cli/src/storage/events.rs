@@ -121,10 +121,6 @@ impl EventLogger {
         Self { session_id }
     }
 
-    pub fn session_id(&self) -> &str {
-        &self.session_id
-    }
-
     /// Write an event. Silently ignores I/O errors so logging never crashes cb.
     pub fn log(&self, event: LogEvent) {
         let now = now_millis();

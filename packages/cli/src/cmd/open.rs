@@ -4,8 +4,8 @@ use anyhow::Result;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener as AsyncTcpListener;
 
-use crate::history;
-use crate::log as cblog;
+use crate::storage::history;
+use crate::storage::events as cblog;
 
 const DASHBOARD_HTML: &str = include_str!("../../site/dashboard.html");
 

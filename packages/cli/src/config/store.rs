@@ -179,15 +179,57 @@ pub struct SpeechConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DoubaoConfig {
+    /// 新版控制台的 API Key（优先）。填了就不再需要 app_id / access_token。
+    #[serde(default)]
+    pub api_key: String,
+    /// 旧版控制台：App ID + Access Token
+    #[serde(default)]
     pub app_id: String,
+    #[serde(default)]
     pub access_token: String,
-    pub tts_cluster: String,
+    /// 语音识别 2.0：`volc.seedasr.sauc.duration`（小时版）/ `volc.seedasr.sauc.concurrent`（并发版）
+    #[serde(default = "default_asr_resource_id")]
     pub asr_resource_id: String,
+    /// 语音合成 2.0：`seed-tts-2.0`（`seed-icl-2.0` 为复刻音色）
+    #[serde(default = "default_tts_resource_id")]
     pub tts_resource_id: String,
+    /// 2.0 音色 ID（`*_uranus_bigtts`）
+    #[serde(default = "default_voice_type")]
     pub voice_type: String,
+    /// 语速倍率 0.5 ~ 2.0（内部映射为接口的 speech_rate）
+    #[serde(default = "default_tts_speed")]
     pub tts_speed: f64,
+    #[serde(default = "default_tts_url")]
     pub tts_url: String,
+    #[serde(default = "default_asr_url")]
     pub asr_url: String,
+}
+
+fn default_asr_resource_id() -> String {
+    "volc.seedasr.sauc.duration".into()
+}
+fn default_tts_resource_id() -> String {
+    "seed-tts-2.0".into()
+}
+fn default_voice_type() -> String {
+    super::presets::DEFAULT_VOICE.into()
+}
+fn default_tts_speed() -> f64 {
+    1.3
+}
+fn default_tts_url() -> String {
+    "https://openspeech.bytedance.com/api/v3/tts/unidirectional".into()
+}
+fn default_asr_url() -> String {
+    "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async".into()
+}
+
+impl DoubaoConfig {
+    /// 新版 API Key 或旧版 App ID + Token，二选一即可。
+    pub fn has_credentials(&self) -> bool {
+        is_real_value(&self.api_key)
+            || (is_real_value(&self.app_id) && is_real_value(&self.access_token))
+    }
 }
 
 // ─── Audio ───────────────────────────────────────────────────────────────────
@@ -268,15 +310,15 @@ impl Default for SpeechConfig {
 impl Default for DoubaoConfig {
     fn default() -> Self {
         Self {
+            api_key: String::new(),
             app_id: String::new(),
             access_token: String::new(),
-            tts_cluster: "volcano_tts".into(),
-            asr_resource_id: "volc.bigasr.sauc.duration".into(),
-            tts_resource_id: "volc.service_type.10029".into(),
-            voice_type: "BV700_V2_streaming".into(),
-            tts_speed: 1.3,
-            tts_url: "https://openspeech.bytedance.com/api/v1/tts".into(),
-            asr_url: "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async".into(),
+            asr_resource_id: default_asr_resource_id(),
+            tts_resource_id: default_tts_resource_id(),
+            voice_type: default_voice_type(),
+            tts_speed: default_tts_speed(),
+            tts_url: default_tts_url(),
+            asr_url: default_asr_url(),
         }
     }
 }
@@ -364,6 +406,9 @@ impl AppConfig {
             }
         }
 
+        // 语音 1.0 → 2.0：资源 ID、接口地址、音色一起升级，用户不用重跑向导。
+        self.speech.doubao.migrate_to_v2();
+
         // Ensure active_llm points to an existing profile
         if !self.active_llm.is_empty()
             && !self.llm_profiles.iter().any(|p| p.name == self.active_llm)
@@ -396,14 +441,14 @@ impl AppConfig {
             }
         }
 
+        if let Ok(v) = std::env::var("DOUBAO_API_KEY") {
+            self.speech.doubao.api_key = v;
+        }
         if let Ok(v) = std::env::var("DOUBAO_APP_ID") {
             self.speech.doubao.app_id = v;
         }
         if let Ok(v) = std::env::var("DOUBAO_ACCESS_TOKEN") {
             self.speech.doubao.access_token = v;
-        }
-        if let Ok(v) = std::env::var("DOUBAO_TTS_CLUSTER") {
-            self.speech.doubao.tts_cluster = v;
         }
         if let Ok(v) = std::env::var("DOUBAO_ASR_RESOURCE_ID") {
             self.speech.doubao.asr_resource_id = v;
@@ -452,9 +497,7 @@ impl AppConfig {
         };
         // Ollama-style local providers don't need a real key
         let key_ok = is_real_value(&profile.api_key) || profile.api_key == "ollama";
-        key_ok
-            && is_real_value(&self.speech.doubao.app_id)
-            && is_real_value(&self.speech.doubao.access_token)
+        key_ok && self.speech.doubao.has_credentials()
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -468,13 +511,33 @@ impl AppConfig {
                 profile.name
             );
         }
-        if self.speech.doubao.app_id.is_empty() {
-            anyhow::bail!("Doubao App ID not set. Run `cb config`");
-        }
-        if self.speech.doubao.access_token.is_empty() {
-            anyhow::bail!("Doubao Access Token not set. Run `cb config`");
+        if !self.speech.doubao.has_credentials() {
+            anyhow::bail!("Doubao credentials not set (api_key, or app_id + access_token). Run `cb config`");
         }
         Ok(())
+    }
+}
+
+impl DoubaoConfig {
+    /// 把 1.0 时代的配置值换成 2.0 对应值。幂等：已是 2.0 的值原样保留。
+    fn migrate_to_v2(&mut self) {
+        if let Some(rest) = self.asr_resource_id.strip_prefix("volc.bigasr.") {
+            self.asr_resource_id = format!("volc.seedasr.{rest}");
+        }
+        if self.tts_resource_id == "volc.service_type.10029"
+            || self.tts_resource_id.starts_with("seed-tts-1.0")
+        {
+            self.tts_resource_id = default_tts_resource_id();
+        }
+        if self.tts_url.contains("/api/v1/tts") {
+            self.tts_url = default_tts_url();
+        }
+        if self.asr_url.ends_with("/sauc/bigmodel") {
+            self.asr_url = default_asr_url();
+        }
+        if let Some(v2) = super::presets::migrate_voice(&self.voice_type) {
+            self.voice_type = v2.to_string();
+        }
     }
 }
 
@@ -497,5 +560,60 @@ fn guess_provider_name(base_url: &str) -> String {
         "Ollama".into()
     } else {
         "Custom".into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migrate_v1_values_to_v2() {
+        let mut d = DoubaoConfig {
+            asr_resource_id: "volc.bigasr.sauc.duration".into(),
+            tts_resource_id: "volc.service_type.10029".into(),
+            tts_url: "https://openspeech.bytedance.com/api/v1/tts".into(),
+            asr_url: "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel".into(),
+            voice_type: "BV700_V2_streaming".into(),
+            ..Default::default()
+        };
+        d.migrate_to_v2();
+        assert_eq!(d.asr_resource_id, "volc.seedasr.sauc.duration");
+        assert_eq!(d.tts_resource_id, "seed-tts-2.0");
+        assert!(d.tts_url.ends_with("/api/v3/tts/unidirectional"));
+        assert!(d.asr_url.ends_with("/sauc/bigmodel_async"));
+        assert_eq!(d.voice_type, "zh_female_cancan_uranus_bigtts");
+    }
+
+    #[test]
+    fn migrate_is_idempotent_and_keeps_cloned_voices() {
+        let mut d = DoubaoConfig { voice_type: "S_abc123".into(), ..Default::default() };
+        let before = d.clone();
+        d.migrate_to_v2();
+        assert_eq!(d.voice_type, before.voice_type);
+        assert_eq!(d.asr_resource_id, before.asr_resource_id);
+    }
+
+    #[test]
+    fn old_toml_without_new_fields_still_parses() {
+        let toml_src = r#"
+            [speech]
+            provider = "doubao"
+            [speech.doubao]
+            app_id = "123"
+            access_token = "tok"
+            tts_cluster = "volcano_tts"
+            asr_resource_id = "volc.bigasr.sauc.duration"
+            tts_resource_id = "volc.service_type.10029"
+            voice_type = "BV405_streaming"
+            tts_speed = 1.6
+            tts_url = "https://openspeech.bytedance.com/api/v1/tts"
+            asr_url = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async"
+        "#;
+        let mut cfg: AppConfig = toml::from_str(toml_src).expect("parse");
+        cfg.migrate_legacy();
+        assert!(cfg.speech.doubao.has_credentials());
+        assert_eq!(cfg.speech.doubao.voice_type, "zh_female_tianmeitaozi_uranus_bigtts");
+        assert_eq!(cfg.speech.doubao.tts_speed, 1.6);
     }
 }

@@ -33,19 +33,23 @@ bun run verify         # lint + typecheck + test + build
 
 ## Architecture (packages/cli)
 
+分层（依赖只能向下，细则见 `packages/cli/DESIGN.md`）：
+
 ```
-audio/capture.rs    VAD + mic recording (cpal)
-audio/playback.rs   MP3 decode + sequential speaker queue
-audio/resample.rs   Multichannel mix → mono 16kHz
-speech/doubao/      Doubao ASR (WebSocket v3) + TTS (REST)
-llm/openai.rs       OpenAI-compatible streaming client
-pipeline/voice.rs   Main loop: record → ASR → wake check → LLM → TTS → play
-config/store.rs     TOML config with legacy migration + env var override
-cmd/                Subcommands: chat, config, install, logs, open
-ui/                 Theme (Color struct), banners, spinners, arrow-key selector
-log.rs              JSONL event logging with per-file rotation
-i18n.rs             zh/en localization + system prompt builder
+main.rs / cli.rs     进程入口 · clap 参数契约
+cmd/                 接口层：chat · config · daemon · logs · open · update（读参数、调下层、打印）
+pipeline/            应用层：voice.rs 主循环 · speak.rs 一轮对话（LLM 流 → 分句 → TTS → 播放）
+domain/              领域层（零 IO，全部单测）：wake · sentence · metrics · semver · health
+speech/              端口 + 适配器：trait Asr/Tts + build_asr/build_tts 工厂；doubao/{protocol,asr,tts}
+llm/                 OpenAI 兼容流式客户端
+audio/               cpal 采集 + VAD · rodio 播放 · 重采样
+config/              store.rs（TOML + 迁移 + env）· presets.rs（LLM 预设 / 2.0 音色）
+storage/             history.rs 对话历史 · events.rs JSONL 事件日志
+platform/            service.rs launchd/systemd 原语 · notify.rs 桌面通知 · update.rs 版本检查
+ui/                  theme · banner · spinner · select · art · i18n
 ```
+
+语音只有豆包 2.0 一条路：ASR `sauc/bigmodel_async`（`volc.seedasr.sauc.duration`）+ TTS `tts/unidirectional`（`seed-tts-2.0`）。**没有本地模型**，不要再加 whisper / kokoro / ollama 语音之类的东西。
 
 ## Key Design Decisions
 
@@ -53,6 +57,7 @@ i18n.rs             zh/en localization + system prompt builder
 - **Log path**: `dirs::data_local_dir()` / `chatbot/events/` (3 files: turns/errors/events per date)
 - **Color system**: `Color` struct with `Display` impl, gated by `init_colors()` (checks isatty + NO_COLOR + TERM=dumb)
 - **Wake word**: 2-pass matching (exact → pinyin) + 5-min active session + deactivation phrases
+- **Speech**: Doubao 2.0 only. `api_key`（新控制台）优先，否则 `app_id + access_token`。1.0 配置值（`BV*` 音色、`volc.bigasr.*`、`/api/v1/tts`、`tts_cluster`）在 `DoubaoConfig::migrate_to_v2` 自动升级
 - **TTS batching**: Sentence-end triggers synthesis, concurrent dispatch, sequential playback
 - **Dashboard**: Embedded via `include_str!()`, served by raw TCP (no framework)
 - **Release**: macOS universal binary (lipo arm64+x86_64), Linux x86_64 + aarch64 (cross)
@@ -223,6 +228,18 @@ When wake word session is active, `threshold_scale = 0.8` (20% more sensitive).
 **Fix**: Delete `.mise.toml`, add `.mise.toml` / `mise.toml` to `.gitignore`. Toolchain declared via `packageManager: bun@x.y.z` in `package.json` (read by `oven-sh/setup-bun` in CI) and rustup for Rust.
 **Rule**: Never commit personal tool-version-manager config (`.mise.toml`, `.tool-versions`, `.nvmrc`-style files) unless the whole team has agreed on that manager. Declare the toolchain in the project's own manifest instead.
 
+### 24. 原型脚本晋升为正式包后没删，在 `scripts/` 里躺了几个月
+**Symptom**: `scripts/local_python_chat/`（faster-whisper + Kokoro 本地模型）和 `scripts/remote_rust_chat/`（豆包 1.0 的 Rust 原型，1000 行）与 `packages/cli` 三份重复实现并存，README / package.json 还在暴露 `local_chat` / `remote_chat` 入口。
+**Root cause**: 从原型到 `packages/cli` 是渐进迁移，迁完没回头清理；"留着以后参考"的原型从没被参考过。
+**Fix**: 整目录删除，`package.json` 去掉对应脚本；本地模型路线彻底放弃，语音统一豆包 2.0。
+**Rule**: 原型一旦晋升为正式包，同一个 PR 里删掉原型。git 历史就是"以后参考"的地方，工作树不是。
+
+### 25. 语音协议升级只改了代码，没给老配置铺迁移路
+**Symptom**: 豆包 TTS v1 REST（`/api/v1/tts` + `cluster=volcano_tts`）不支持 2.0 音色；直接切 v3 后，老用户 `config.toml` 里的 `BV700_V2_streaming` / `volc.service_type.10029` / `volc.bigasr.*` 全部失效，会在下一次启动时 401 或 "resource ID is mismatched with speaker"。
+**Root cause**: 协议升级是"新默认值"思维，忘了默认值只对新用户生效，老配置文件里存的是旧值。
+**Fix**: `DoubaoConfig` 全字段 `#[serde(default)]`（老文件缺新字段也能读），`migrate_to_v2()` 幂等升级资源 ID / URL / 音色，`presets::migrate_voice` 只动 1.0 形态的 ID、不碰复刻音色 `S_*`；`#[ignore]` 回环测试用真实凭证验证 TTS 2.0 → ASR 2.0。
+**Rule**: 任何外部协议 / 供应商版本切换，必须同 PR 交付三样东西：老值到新值的幂等迁移函数、用真实旧配置样本的单测、一个可手动跑的真实接口冒烟测试。
+
 ## Release Cadence (phased rollout)
 
 每次版本变更按三段式铺开，给追新用户和求稳用户不同节奏：
@@ -246,6 +263,7 @@ When wake word session is active, `threshold_scale = 0.8` (20% more sensitive).
 - **Naming**: Always use `chatbot` (not chatbox). After any rename, run `grep -r` across the entire repo.
 - **Paths**: All user-facing paths use `~/.config/chatbot/`. Never use `dirs::config_dir()` or `dirs::data_local_dir()`.
 - **VAD tuning**: Never change more than one parameter at a time. Always test with keyboard typing.
+- **Layering**: 新代码先判断层级（见 DESIGN.md §1）。`domain` 不许有 IO；`pipeline`/`cmd` 不许 `use` 具体 provider 类型，只能过 `speech::build_*`。
 - **TTS text**: Minimum 2 alphanumeric characters before sending to API. Use `chars().count()` not `len()`.
 - **Error logging**: Record every mistake in CLAUDE.md with symptom/cause/fix/rule.
 
@@ -283,3 +301,6 @@ When wake word session is active, `threshold_scale = 0.8` (20% more sensitive).
   - TTS 磁盘缓存（`~/.config/chatbot/cache/tts/<hash>.mp3`，重复台词 0 延迟）
   - ASR 音频帧跳过 gzip（PCM 压不动，白烧 CPU）
   - ASR/TTS 瞬时错误重试 1 次（5xx/网络抖动，401 不重试）
+- [x] 删除本地模型原型（faster-whisper / Kokoro）与豆包 1.0 Rust 原型，语音统一豆包 2.0
+- [x] 豆包 2.0：ASR `seedasr` 二遍识别 + TTS `seed-tts-2.0` HTTP 流式，新旧控制台鉴权并存，老配置自动迁移，真实凭证回环测试通过
+- [x] CLI 分层重构：cmd / pipeline / domain / speech·llm·audio·config·storage·platform / ui，`domain` 零 IO 33 个单测

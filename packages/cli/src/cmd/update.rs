@@ -1,8 +1,8 @@
-use std::process::Command;
-
 use anyhow::{Context, Result};
 
-use crate::update_check::{compare_versions, fetch_latest, Channel, REPO, detect_channel};
+use crate::domain::semver::compare_versions;
+use crate::platform::service::{is_daemon_running, restart_daemon};
+use crate::platform::update::{detect_channel, fetch_latest, Channel, REPO};
 
 pub async fn run(force: bool) -> Result<()> {
     let current = env!("CARGO_PKG_VERSION");
@@ -125,41 +125,4 @@ pub async fn run(force: bool) -> Result<()> {
     }
 
     Ok(())
-}
-
-pub fn is_daemon_running() -> bool {
-    if cfg!(target_os = "macos") {
-        Command::new("launchctl")
-            .args(["list", "com.erchoc.chatbot"])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    } else {
-        Command::new("systemctl")
-            .args(["--user", "is-active", "chatbot.service"])
-            .output()
-            .map(|o| {
-                String::from_utf8_lossy(&o.stdout)
-                    .trim()
-                    == "active"
-            })
-            .unwrap_or(false)
-    }
-}
-
-pub fn restart_daemon() {
-    if cfg!(target_os = "macos") {
-        // Target launchd in the caller's GUI session — uid 501 worked for me
-        // but breaks for any other user, so resolve it dynamically.
-        let uid = unsafe { libc::getuid() };
-        let _ = Command::new("launchctl")
-            .args(["kill", "SIGTERM", &format!("gui/{uid}/com.erchoc.chatbot")])
-            .output();
-        // Fallback: pkill if launchctl kill doesn't work
-        let _ = Command::new("pkill").args(["-f", "cb chat"]).output();
-    } else {
-        let _ = Command::new("systemctl")
-            .args(["--user", "restart", "chatbot.service"])
-            .output();
-    }
 }

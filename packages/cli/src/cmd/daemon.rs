@@ -1,14 +1,21 @@
+//! `cb install` / `cb uninstall` / `cb status`：守护进程的安装、卸载与状态流程。
+//!
+//! 平台原语（路径、是否在跑、重启、读日志）在 `platform::service`，
+//! 健康判定规则在 `domain::health`；这里只编排流程并打印。
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 
 use anyhow::{Context, Result};
 
-const SERVICE_LABEL: &str = "com.erchoc.chatbot";
-const SERVICE_DESC: &str = "Chatbox voice assistant daemon";
+use crate::domain::health::scan_lines_for_mic_failure;
+use crate::platform::service::{
+    self, launchd_log_dir, launchd_plist_path, run_cmd, systemd_service_path, SERVICE_DESC,
+    SERVICE_LABEL, SYSTEMD_UNIT,
+};
 
 /// Install and start the daemon service
-pub async fn run() -> Result<()> {
+pub async fn install() -> Result<()> {
     let cb_bin = get_cb_binary_path()?;
     println!("  Installing daemon service...");
     println!("  Binary: {}", cb_bin.display());
@@ -72,8 +79,8 @@ pub async fn status() -> Result<()> {
     // Daemon-only users never see the in-loop update banner (it goes to a
     // log file). `cb status` is their main touchpoint, so surface the notice
     // here too.
-    if let Some(v) = crate::update_check::pending_notice() {
-        let hint = crate::update_check::upgrade_hint();
+    if let Some(v) = crate::platform::update::pending_notice() {
+        let hint = crate::platform::update::upgrade_hint();
         println!();
         println!(
             "  \x1b[96m⬆  发现新版本 v{v}，运行 \x1b[1m{hint}\x1b[0m\x1b[96m 升级\x1b[0m"
@@ -211,21 +218,6 @@ fn request_microphone_permission() -> Result<()> {
     }
 
     Ok(())
-}
-
-// === macOS: launchd ===
-
-fn launchd_plist_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("~"))
-        .join("Library/LaunchAgents")
-        .join(format!("{SERVICE_LABEL}.plist"))
-}
-
-fn launchd_log_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("~"))
-        .join("Library/Logs/chatbot")
 }
 
 fn install_launchd(cb_bin: &PathBuf) -> Result<()> {
@@ -430,8 +422,7 @@ fn status_launchd() -> Result<()> {
 
         // Surface obvious failure modes that leave the daemon "running"
         // but not actually working (most commonly: no mic permission).
-        let stderr_path = log_dir.join("cb.stderr.log");
-        let warnings = detect_daemon_health_issues(&stderr_path);
+        let warnings = service::daemon_health_warnings();
         if !warnings.is_empty() {
             println!();
             println!("  \x1b[91m⚠  健康检查\x1b[0m");
@@ -459,25 +450,12 @@ fn status_launchd() -> Result<()> {
     Ok(())
 }
 
-// === Linux: systemd user service ===
-
-fn systemd_service_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("~"))
-                .join(".config")
-        })
-        .join("systemd/user")
-        .join("chatbot.service")
-}
-
 fn install_systemd(cb_bin: &PathBuf) -> Result<()> {
     let service_path = systemd_service_path();
 
     // Stop existing service if running (ignore errors)
     let _ = Command::new("systemctl")
-        .args(["--user", "stop", "chatbot.service"])
+        .args(["--user", "stop", SYSTEMD_UNIT])
         .output();
 
     let service_content = format!(
@@ -506,8 +484,8 @@ WantedBy=default.target
 
     // Reload, enable, and start
     run_cmd("systemctl", &["--user", "daemon-reload"])?;
-    run_cmd("systemctl", &["--user", "enable", "chatbot.service"])?;
-    run_cmd("systemctl", &["--user", "start", "chatbot.service"])?;
+    run_cmd("systemctl", &["--user", "enable", SYSTEMD_UNIT])?;
+    run_cmd("systemctl", &["--user", "start", SYSTEMD_UNIT])?;
 
     println!("  Service enabled and started");
     println!("  Logs: journalctl --user -u chatbot.service -f");
@@ -519,10 +497,10 @@ fn uninstall_systemd() -> Result<()> {
 
     // Stop and disable
     let _ = Command::new("systemctl")
-        .args(["--user", "stop", "chatbot.service"])
+        .args(["--user", "stop", SYSTEMD_UNIT])
         .output();
     let _ = Command::new("systemctl")
-        .args(["--user", "disable", "chatbot.service"])
+        .args(["--user", "disable", SYSTEMD_UNIT])
         .output();
     println!("  Service stopped and disabled");
 
@@ -564,7 +542,7 @@ fn uninstall_systemd() -> Result<()> {
 fn status_systemd() -> Result<()> {
     let service_path = systemd_service_path();
     let output = Command::new("systemctl")
-        .args(["--user", "is-active", "chatbot.service"])
+        .args(["--user", "is-active", SYSTEMD_UNIT])
         .output()
         .context("Failed to run systemctl")?;
 
@@ -575,7 +553,7 @@ fn status_systemd() -> Result<()> {
         println!("     配置文件: {}", service_path.display());
 
         // Ask journald for the last 80 lines; sniff for mic failure loop.
-        let warnings = detect_systemd_health_issues();
+        let warnings = service::daemon_health_warnings();
         if !warnings.is_empty() {
             println!();
             println!("  \x1b[91m⚠  健康检查\x1b[0m");
@@ -603,146 +581,10 @@ fn status_systemd() -> Result<()> {
     Ok(())
 }
 
-// ── Daemon health diagnostics ────────────────────────────────────────────
-//
-// A "running" daemon can still be useless if it can't acquire the mic (TCC
-// not granted for the binary, device unplugged, etc). The daemon retries
-// forever and writes to stderr, but `launchctl list` / `systemctl is-active`
-// both keep saying "running". These helpers read recent daemon output and
-// flag the common silent-failure modes.
-
-const MIC_FAILURE_PATTERNS: &[&str] = &[
-    "Failed to get default microphone config",
-    "录音失败",
-    "麦克风仍不可用",
-    "麦克风断开",
-    "mic disconnected",
-    "mic calibration failed",
-];
-
-/// Count how many of the last `max_lines` in `path` match a mic-failure
-/// pattern, and whether the most recent line is one.
-fn scan_lines_for_mic_failure(lines: &[&str]) -> (usize, bool) {
-    let count = lines
-        .iter()
-        .filter(|l| MIC_FAILURE_PATTERNS.iter().any(|p| l.contains(p)))
-        .count();
-    let last_is_failure = lines
-        .last()
-        .map(|l| MIC_FAILURE_PATTERNS.iter().any(|p| l.contains(p)))
-        .unwrap_or(false);
-    (count, last_is_failure)
-}
-
-fn detect_daemon_health_issues(stderr_path: &PathBuf) -> Vec<String> {
-    let content = match std::fs::read_to_string(stderr_path) {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
-    };
-    let lines: Vec<&str> = content.lines().collect();
-    let tail_len = lines.len().min(80);
-    let tail: Vec<&str> = lines[lines.len() - tail_len..].to_vec();
-    build_health_warnings(&tail)
-}
-
-fn detect_systemd_health_issues() -> Vec<String> {
-    let output = Command::new("journalctl")
-        .args([
-            "--user",
-            "-u",
-            "chatbot.service",
-            "-n",
-            "80",
-            "--no-pager",
-            "-o",
-            "cat",
-        ])
-        .output();
-    let content = match output {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
-        _ => return Vec::new(),
-    };
-    let tail: Vec<&str> = content.lines().collect();
-    build_health_warnings(&tail)
-}
-
-fn build_health_warnings(tail: &[&str]) -> Vec<String> {
-    let mut warnings = Vec::new();
-    let (mic_count, mic_last) = scan_lines_for_mic_failure(tail);
-    if mic_count >= 3 && mic_last {
-        warnings.push(format!(
-            "麦克风持续不可用（最近 {} 行中有 {} 条录音失败日志）",
-            tail.len(),
-            mic_count
-        ));
-    } else if mic_count >= 3 {
-        warnings.push(format!(
-            "最近有 {} 条录音失败日志（可能已恢复，但建议检查）",
-            mic_count
-        ));
-    }
-    warnings
-}
-
 fn print_mic_recovery_hint() {
     println!();
     println!("     \x1b[90m修复步骤:\x1b[0m");
     println!("     \x1b[90m  1. 系统设置 → 隐私与安全性 → 麦克风 → 确认 cb 已勾选\x1b[0m");
     println!("     \x1b[90m  2. 若无 cb 条目: 前台跑一次 `cb chat 你好` 触发授权弹窗\x1b[0m");
     println!("     \x1b[90m  3. 重装守护进程:  cb uninstall && cb install\x1b[0m");
-}
-
-#[cfg(test)]
-mod health_tests {
-    use super::*;
-
-    #[test]
-    fn mic_failure_detected_when_tail_shows_retry_loop() {
-        let lines = vec![
-            "   录音失败: Failed to get default microphone config",
-            "   麦克风仍不可用，每 60 秒自动检测，连接后自动恢复...",
-            "   录音失败: Failed to get default microphone config",
-            "   麦克风仍不可用，每 60 秒自动检测，连接后自动恢复...",
-            "   录音失败: Failed to get default microphone config",
-        ];
-        let (count, last) = scan_lines_for_mic_failure(&lines);
-        assert_eq!(count, 5);
-        assert!(last);
-        assert!(!build_health_warnings(&lines).is_empty());
-    }
-
-    #[test]
-    fn clean_log_produces_no_warning() {
-        let lines = vec!["   ● session start s123", "   ✓ LLM OK", "   ✓ 语音 API OK"];
-        let (count, _) = scan_lines_for_mic_failure(&lines);
-        assert_eq!(count, 0);
-        assert!(build_health_warnings(&lines).is_empty());
-    }
-
-    #[test]
-    fn past_failure_flagged_softly_when_recovered() {
-        // Three old failures, but the latest line is success — warn
-        // softly ("may have recovered") rather than the red-alert variant.
-        let mut lines = vec![
-            "   录音失败: Failed to get default microphone config",
-            "   录音失败: Failed to get default microphone config",
-            "   录音失败: Failed to get default microphone config",
-        ];
-        lines.push("   ● session start s999");
-        let warnings = build_health_warnings(&lines);
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("可能已恢复"));
-    }
-}
-
-fn run_cmd(cmd: &str, args: &[&str]) -> Result<()> {
-    let output = Command::new(cmd)
-        .args(args)
-        .output()
-        .with_context(|| format!("Failed to run: {cmd} {}", args.join(" ")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("{cmd} failed: {stderr}");
-    }
-    Ok(())
 }

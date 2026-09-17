@@ -1,33 +1,28 @@
-use std::io::{Read as IoRead, Write};
-use std::time::Instant;
+//! 豆包流式语音识别模型 2.0（WebSocket v3，`sauc/bigmodel_async`）。
+//!
+//! 用法是"批量"的：VAD 已经在本地切好一句，这里一次把整段 PCM 分片发出去，
+//! 打上最后一包标记，然后等服务端的终包（`enable_nonstream` 二遍识别结果更准）。
+//! 文档：<https://www.volcengine.com/docs/6561/2630027>
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use async_trait::async_trait;
-use flate2::read::GzDecoder;
-use flate2::write::GzEncoder;
-use flate2::Compression;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
-use tokio_tungstenite::tungstenite::{
-    client::IntoClientRequest, Error as WsError, Message as WsMessage,
-};
+use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Error as WsError, Message as WsMessage};
 use uuid::Uuid;
 
+use super::protocol::{self as p, MSG_AUDIO_ONLY, MSG_FULL_CLIENT, MSG_FULL_SERVER};
+use super::{auth_headers, credentials_hint, is_transient_error};
 use crate::config::DoubaoConfig;
 use crate::speech::Asr;
-
-// WebSocket binary protocol frame headers (Doubao ASR v3)
-// Byte[2] high nibble = serialization (1=JSON), low nibble = compression (1=gzip, 0=none).
-// JSON config frame is gzip-compressed; PCM audio is incompressible so we send raw.
-const WS_FULL_CLIENT: [u8; 4] = [0x11, 0x10, 0x11, 0x00];
-const WS_AUDIO_ONLY: [u8; 4] = [0x11, 0x20, 0x10, 0x00];
-const WS_LAST_AUDIO: [u8; 4] = [0x11, 0x22, 0x10, 0x00];
-const ASR_SEG_SIZE: usize = 160_000; // 5s @ 16kHz * 2 bytes
-const MAX_RETRIES: u32 = 1;
-
-const TARGET_RATE: u32 = 16000;
-
 use crate::ui::theme::{MUTED, RESET};
+
+/// 每包音频 200ms @16kHz 16bit mono（官方推荐 100~200ms）。
+const CHUNK_BYTES: usize = 16_000 * 2 / 5;
+const MAX_RETRIES: u32 = 1;
+const RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+const TARGET_RATE: u32 = 16_000;
 
 pub struct DoubaoAsr {
     cfg: DoubaoConfig,
@@ -38,289 +33,170 @@ impl DoubaoAsr {
     pub fn new(cfg: DoubaoConfig, debug: bool) -> Self {
         Self { cfg, debug }
     }
-}
 
-macro_rules! debug_log {
-    ($self:expr, $($arg:tt)*) => {
-        if $self.debug {
-            eprintln!($($arg)*);
+    fn debug(&self, msg: impl std::fmt::Display) {
+        if self.debug {
+            eprintln!("   {MUTED}[DEBUG] {msg}{RESET}");
         }
-    };
+    }
 }
 
 #[async_trait]
 impl Asr for DoubaoAsr {
     async fn recognize(&self, wav_data: &[u8]) -> Result<(String, f32)> {
         let t0 = Instant::now();
-        let mut attempt: u32 = 0;
+        let mut attempt = 0;
         loop {
-            match self.recognize_once(wav_data, t0).await {
-                Ok(v) => return Ok(v),
-                Err(e) => {
-                    if attempt >= MAX_RETRIES || !is_transient_asr_error(&e) {
-                        return Err(e);
-                    }
+            match self.recognize_once(wav_data).await {
+                Ok(text) => return Ok((text, t0.elapsed().as_secs_f32() * 1000.0)),
+                Err(e) if attempt < MAX_RETRIES && is_transient_error(&e) => {
                     attempt += 1;
-                    debug_log!(
-                        self,
-                        "   {MUTED}[DEBUG] ASR transient error, retrying ({attempt}/{MAX_RETRIES}): {e}{RESET}"
-                    );
-                    tokio::time::sleep(tokio::time::Duration::from_millis(500 * attempt as u64))
-                        .await;
+                    self.debug(format!("ASR transient error, retrying ({attempt}/{MAX_RETRIES}): {e:#}"));
+                    tokio::time::sleep(Duration::from_millis(500 * attempt as u64)).await;
                 }
+                Err(e) => return Err(e),
             }
         }
     }
 }
 
 impl DoubaoAsr {
-    async fn recognize_once(&self, wav_data: &[u8], t0: Instant) -> Result<(String, f32)> {
-        let connect_id = Uuid::new_v4().to_string();
-        debug_log!(
-            self,
-            "   {MUTED}[DEBUG] ASR(WS v3) -> {} appid={}{RESET}",
-            self.cfg.asr_url,
-            self.cfg.app_id
-        );
+    async fn recognize_once(&self, wav_data: &[u8]) -> Result<String> {
+        let request_id = Uuid::new_v4().to_string();
+        self.debug(format!("ASR 2.0 -> {} resource={} req={request_id}", self.cfg.asr_url, self.cfg.asr_resource_id));
 
         let mut request = self.cfg.asr_url.as_str().into_client_request()?;
         {
             let headers = request.headers_mut();
-            headers.insert("X-Api-App-Key", self.cfg.app_id.parse()?);
-            headers.insert("X-Api-Access-Key", self.cfg.access_token.parse()?);
+            for (k, v) in auth_headers(&self.cfg) {
+                headers.insert(k, v.parse()?);
+            }
             headers.insert("X-Api-Resource-Id", self.cfg.asr_resource_id.parse()?);
-            headers.insert("X-Api-Connect-Id", connect_id.parse()?);
+            headers.insert("X-Api-Request-Id", request_id.parse()?);
+            headers.insert("X-Api-Connect-Id", Uuid::new_v4().to_string().parse()?);
         }
 
         let (mut ws, _) = tokio_tungstenite::connect_async(request).await.map_err(|e| match e {
             WsError::Http(resp) => {
                 let status = resp.status();
-                let logid = resp
-                    .headers()
-                    .get("x-tt-logid")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("-");
-                if status == tokio_tungstenite::tungstenite::http::StatusCode::UNAUTHORIZED {
-                    anyhow::anyhow!(
-                        "ASR WebSocket connection failed: HTTP {status} (x-tt-logid={logid}). Check app_id/access_token/asr_resource_id"
-                    )
+                let logid = resp.headers().get("x-tt-logid").and_then(|v| v.to_str().ok()).unwrap_or("-");
+                if status.as_u16() == 401 || status.as_u16() == 403 {
+                    anyhow::anyhow!("ASR 连接被拒 HTTP {status} (x-tt-logid={logid})：{}", credentials_hint())
                 } else {
-                    anyhow::anyhow!(
-                        "ASR WebSocket connection failed: HTTP {status} (x-tt-logid={logid})"
-                    )
+                    anyhow::anyhow!("ASR WebSocket connection failed: HTTP {status} (x-tt-logid={logid})")
                 }
             }
             other => anyhow::anyhow!("ASR WebSocket connection failed: {other}"),
         })?;
 
-        // 1. Send config frame (JSON, gzip-compressed)
-        let req_json = json!({
+        // 1. full client request（JSON + gzip）
+        let req = json!({
             "user": { "uid": "chatbot_cli" },
-            "request": {
-                "reqid": Uuid::new_v4().to_string(),
-                "nbest": 1,
-                "model_name": "bigmodel",
-                "enable_punc": true,
-                "enable_itn": true,
-                "result_type": "full",
-                "sequence": 1
-            },
             "audio": {
-                "format": "wav",
+                "format": "pcm",
                 "codec": "raw",
                 "rate": TARGET_RATE,
                 "bits": 16,
-                "channel": 1,
-                "language": "zh-CN"
+                "channel": 1
+            },
+            "request": {
+                "model_name": "bigmodel",
+                "enable_nonstream": true,
+                "enable_itn": true,
+                "enable_punc": true,
+                "enable_ddc": true,
+                "result_type": "full",
+                "end_window_size": 800
             }
         });
-
-        let frame = build_ws_frame(&WS_FULL_CLIENT, &serde_json::to_vec(&req_json)?, true);
+        let frame = p::encode(MSG_FULL_CLIENT, p::FLAG_NONE, p::SER_JSON, p::COMP_GZIP, &serde_json::to_vec(&req)?)?;
         ws.send(WsMessage::Binary(frame)).await?;
 
-        // 2. Send audio segments (raw PCM — gzip wouldn't compress, skip to save CPU)
-        for chunk in wav_data.chunks(ASR_SEG_SIZE) {
-            let frame = build_ws_frame(&WS_AUDIO_ONLY, chunk, false);
+        // 2. 音频分片（PCM 压不动，不 gzip）；最后一包打 LAST 标记
+        let pcm = strip_wav_header(wav_data);
+        let chunks: Vec<&[u8]> = pcm.chunks(CHUNK_BYTES).collect();
+        let n = chunks.len();
+        for (i, chunk) in chunks.iter().enumerate() {
+            let flags = if i + 1 == n { p::FLAG_LAST } else { p::FLAG_NONE };
+            let frame = p::encode(MSG_AUDIO_ONLY, flags, p::SER_NONE, p::COMP_NONE, chunk)?;
             ws.send(WsMessage::Binary(frame)).await?;
         }
+        if n == 0 {
+            ws.send(WsMessage::Binary(p::encode(MSG_AUDIO_ONLY, p::FLAG_LAST, p::SER_NONE, p::COMP_NONE, &[])?)).await?;
+        }
 
-        // 3. Send end-of-audio frame
-        let finish = build_ws_frame(&WS_LAST_AUDIO, &[], false);
-        ws.send(WsMessage::Binary(finish)).await?;
-
-        // 4. Read responses
+        // 3. 收结果直到终包
         let mut last_text = String::new();
-        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
-
+        let deadline = tokio::time::Instant::now() + RESPONSE_TIMEOUT;
         loop {
             let msg = match tokio::time::timeout_at(deadline, ws.next()).await {
                 Ok(Some(Ok(msg))) => msg,
-                Ok(Some(Err(_))) | Ok(None) | Err(_) => break,
+                Ok(Some(Err(e))) => {
+                    self.debug(format!("ASR ws error: {e}"));
+                    break;
+                }
+                Ok(None) => break,
+                Err(_) => {
+                    self.debug("ASR response timeout");
+                    break;
+                }
             };
-
-            if let WsMessage::Binary(data) = msg {
-                if let Ok(resp) = parse_asr_ws(&data) {
-                    if !resp.result.text.is_empty() {
-                        debug_log!(
-                            self,
-                            "   {MUTED}[DEBUG] Recognized: \"{}\"{RESET}",
-                            resp.result.text
-                        );
-                        last_text = resp.result.text.clone();
+            match msg {
+                WsMessage::Binary(data) => {
+                    let frame = p::decode(&data)?;
+                    if frame.msg_type == MSG_FULL_SERVER && frame.is_json && !frame.payload.is_empty() {
+                        if let Ok(resp) = serde_json::from_slice::<AsrResponse>(&frame.payload) {
+                            if !resp.result.text.is_empty() {
+                                last_text = resp.result.text;
+                            }
+                        }
+                    }
+                    if frame.is_last() {
+                        break;
                     }
                 }
-            } else if matches!(msg, WsMessage::Close(_)) {
-                break;
+                WsMessage::Close(_) => break,
+                _ => {}
             }
         }
-
         ws.close(None).await.ok();
 
-        let elapsed = t0.elapsed().as_secs_f32() * 1000.0;
-        Ok((last_text.trim().to_string(), elapsed))
+        self.debug(format!("Recognized: {last_text:?}"));
+        Ok(last_text.trim().to_string())
     }
 }
 
-// 401 means bad creds — never retry. Connect/IO/timeout errors are worth one retry.
-fn is_transient_asr_error(e: &anyhow::Error) -> bool {
-    let msg = format!("{e}");
-    if msg.contains("HTTP 401") || msg.contains("Check app_id") {
-        return false;
-    }
-    msg.contains("HTTP 5")
-        || msg.contains("connection")
-        || msg.contains("Connection")
-        || msg.contains("timed out")
-        || msg.contains("reset")
-        || msg.contains("Io")
-}
-
-// === Internal helpers ===
-
-fn gzip_compress(data: &[u8]) -> Result<Vec<u8>> {
-    let mut enc = GzEncoder::new(Vec::new(), Compression::default());
-    enc.write_all(data)?;
-    Ok(enc.finish()?)
-}
-
-fn gzip_decompress(data: &[u8]) -> Result<Vec<u8>> {
-    let mut dec = GzDecoder::new(data);
-    let mut out = Vec::new();
-    dec.read_to_end(&mut out)?;
-    Ok(out)
-}
-
-fn build_ws_frame(header: &[u8; 4], raw_data: &[u8], compress: bool) -> Vec<u8> {
-    let payload: std::borrow::Cow<'_, [u8]> = if compress {
-        match gzip_compress(raw_data) {
-            Ok(c) => std::borrow::Cow::Owned(c),
-            Err(_) => std::borrow::Cow::Borrowed(raw_data),
-        }
+/// 输入是 `encode_wav` 产出的 44 字节标准头 WAV；服务端要裸 PCM。
+fn strip_wav_header(data: &[u8]) -> &[u8] {
+    if data.len() >= 44 && &data[..4] == b"RIFF" && &data[8..12] == b"WAVE" {
+        &data[44..]
     } else {
-        std::borrow::Cow::Borrowed(raw_data)
-    };
-    let mut frame = Vec::with_capacity(4 + 4 + payload.len());
-    frame.extend_from_slice(header);
-    frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    frame.extend_from_slice(&payload);
-    frame
+        data
+    }
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
-struct AsrWsResponse {
+struct AsrResponse {
     #[serde(default)]
-    result: AsrResultItem,
+    result: AsrResult,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
-struct AsrResultItem {
+struct AsrResult {
     #[serde(default)]
     text: String,
 }
 
-fn parse_asr_ws(msg: &[u8]) -> Result<AsrWsResponse> {
-    if msg.len() < 4 {
-        anyhow::bail!("ASR response too short ({}B)", msg.len());
-    }
-    let header_size = (msg[0] & 0x0f) as usize;
-    let message_type = msg[1] >> 4;
-    let flags = msg[1] & 0x0f;
-    let serialization = msg[2] >> 4;
-    let compression = msg[2] & 0x0f;
-    let header_bytes = header_size * 4;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    if msg.len() < header_bytes {
-        anyhow::bail!("ASR header incomplete");
-    }
-    let payload = &msg[header_bytes..];
-    let has_sequence = (flags & 0x01) != 0;
-
-    let payload_msg: Option<&[u8]> = match message_type {
-        // SERVER_FULL_RESPONSE
-        0x09 => {
-            let mut off = 0_usize;
-            if has_sequence {
-                off += 4;
-            }
-            if payload.len() < off + 4 {
-                return Ok(AsrWsResponse::default());
-            }
-            let size = u32::from_be_bytes(payload[off..off + 4].try_into()?) as usize;
-            off += 4;
-            if size == 0 {
-                None
-            } else {
-                Some(&payload[off..off + size])
-            }
-        }
-        // SERVER_ACK
-        0x0b => {
-            if payload.len() >= 8 {
-                let size = u32::from_be_bytes(payload[4..8].try_into()?) as usize;
-                if size == 0 {
-                    None
-                } else {
-                    Some(&payload[8..8 + size])
-                }
-            } else {
-                None
-            }
-        }
-        // SERVER_ERROR_RESPONSE
-        0x0f => {
-            if payload.len() < 8 {
-                anyhow::bail!("Error payload too short");
-            }
-            let code = i32::from_be_bytes(payload[..4].try_into()?);
-            let size = u32::from_be_bytes(payload[4..8].try_into()?) as usize;
-            let data = &payload[8..8 + size];
-            let decompressed = if compression == 1 {
-                gzip_decompress(data)?
-            } else {
-                data.to_vec()
-            };
-            anyhow::bail!(
-                "ASR error code={}: {}",
-                code,
-                String::from_utf8_lossy(&decompressed)
-            );
-        }
-        _ => None,
-    };
-
-    let Some(payload_msg) = payload_msg else {
-        return Ok(AsrWsResponse::default());
-    };
-
-    let decompressed = if compression == 1 {
-        gzip_decompress(payload_msg)?
-    } else {
-        payload_msg.to_vec()
-    };
-
-    if serialization == 1 && !decompressed.is_empty() {
-        Ok(serde_json::from_slice(&decompressed)?)
-    } else {
-        Ok(AsrWsResponse::default())
+    #[test]
+    fn strips_riff_header_only_when_present() {
+        let mut wav = b"RIFF\0\0\0\0WAVE".to_vec();
+        wav.resize(44, 0);
+        wav.extend_from_slice(&[1, 2, 3]);
+        assert_eq!(strip_wav_header(&wav), &[1, 2, 3]);
+        assert_eq!(strip_wav_header(&[9, 9]), &[9, 9]);
     }
 }

@@ -2,10 +2,10 @@ use std::io::{self, Write};
 
 use anyhow::Result;
 
-use crate::cmd::update::{is_daemon_running, restart_daemon};
+use crate::platform::service::{is_daemon_running, restart_daemon};
 use crate::config::{
     is_real_value,
-    providers::{DOUBAO_VOICES, LLM_PRESETS, VoicePreset},
+    presets::{DOUBAO_VOICES, LLM_PRESETS, VoicePreset},
     AppConfig, LlmProfile, config_path_display,
 };
 use crate::ui::{
@@ -103,12 +103,9 @@ pub fn ensure_config(mut cfg: AppConfig) -> Result<AppConfig> {
         println!();
     }
 
-    if !is_real_value(&cfg.speech.doubao.app_id) {
-        println!("   {BOLD}语音供应商:{RESET} Doubao  {MUTED}(console.volcengine.com/speech){RESET}");
-        cfg.speech.doubao.app_id = prompt_required("   App ID")?;
-    }
-    if !is_real_value(&cfg.speech.doubao.access_token) {
-        cfg.speech.doubao.access_token = prompt_required("   Access Token")?;
+    if !cfg.speech.doubao.has_credentials() {
+        println!("   {BOLD}语音供应商:{RESET} Doubao 2.0  {MUTED}(console.volcengine.com/speech){RESET}");
+        prompt_doubao_credentials(&mut cfg)?;
     }
 
     save_and_reload(&cfg)?;
@@ -187,23 +184,30 @@ pub fn show() -> Result<()> {
         .map(|v| format!("{} · {}", v.name, v.style))
         .unwrap_or_else(|| "Custom".to_string());
     println!("   {BR_CYAN}── 语音{RESET}");
-    println!("   {MUTED}供应商{RESET}    Doubao");
-    println!(
-        "   {MUTED}App ID{RESET}    {}",
-        if cfg.speech.doubao.app_id.is_empty() {
-            format!("{BR_RED}(未设置){RESET}")
-        } else {
-            cfg.speech.doubao.app_id.clone()
-        }
-    );
-    println!(
-        "   {MUTED}Token{RESET}     {}",
-        if cfg.speech.doubao.access_token.is_empty() {
-            format!("{BR_RED}(未设置){RESET}")
-        } else {
-            format!("{MUTED}{}{RESET}", mask_key(&cfg.speech.doubao.access_token))
-        }
-    );
+    println!("   {MUTED}供应商{RESET}    Doubao  {MUTED}(语音识别 2.0 + 语音合成 2.0){RESET}");
+    if is_real_value(&cfg.speech.doubao.api_key) {
+        println!(
+            "   {MUTED}API Key{RESET}   {MUTED}{}{RESET}",
+            mask_key(&cfg.speech.doubao.api_key)
+        );
+    } else {
+        println!(
+            "   {MUTED}App ID{RESET}    {}",
+            if cfg.speech.doubao.app_id.is_empty() {
+                format!("{BR_RED}(未设置){RESET}")
+            } else {
+                cfg.speech.doubao.app_id.clone()
+            }
+        );
+        println!(
+            "   {MUTED}Token{RESET}     {}",
+            if cfg.speech.doubao.access_token.is_empty() {
+                format!("{BR_RED}(未设置){RESET}")
+            } else {
+                format!("{MUTED}{}{RESET}", mask_key(&cfg.speech.doubao.access_token))
+            }
+        );
+    }
     println!(
         "   {MUTED}音色{RESET}      {BOLD}{}{RESET}  {MUTED}{}{RESET}",
         cfg.speech.doubao.voice_type, voice_label
@@ -211,7 +215,6 @@ pub fn show() -> Result<()> {
     println!("   {MUTED}语速{RESET}      {}x", cfg.speech.doubao.tts_speed);
     println!("   {MUTED}TTS 资源{RESET}  {}", cfg.speech.doubao.tts_resource_id);
     println!("   {MUTED}ASR 资源{RESET}  {}", cfg.speech.doubao.asr_resource_id);
-    println!("   {MUTED}TTS 集群{RESET}  {}", cfg.speech.doubao.tts_cluster);
     println!("   {MUTED}TTS URL{RESET}   {}", cfg.speech.doubao.tts_url);
     println!();
 
@@ -256,9 +259,9 @@ pub fn set(key: &str, value: &str) -> Result<()> {
             }
             cfg.persona.wake_word.word = value.to_string();
         }
+        "speech.doubao.api_key" => cfg.speech.doubao.api_key = value.to_string(),
         "speech.doubao.app_id" => cfg.speech.doubao.app_id = value.to_string(),
         "speech.doubao.access_token" => cfg.speech.doubao.access_token = value.to_string(),
-        "speech.doubao.tts_cluster" => cfg.speech.doubao.tts_cluster = value.to_string(),
         "speech.doubao.asr_resource_id" => cfg.speech.doubao.asr_resource_id = value.to_string(),
         "speech.doubao.tts_resource_id" => cfg.speech.doubao.tts_resource_id = value.to_string(),
         "speech.doubao.voice_type" => cfg.speech.doubao.voice_type = value.to_string(),
@@ -282,7 +285,7 @@ pub fn set(key: &str, value: &str) -> Result<()> {
         _ => anyhow::bail!(
             "未知 key: {key}\n\
              可用: persona.name, persona.language, persona.wake_word.enabled, persona.wake_word.word,\n\
-             speech.doubao.app_id, speech.doubao.access_token, speech.doubao.tts_cluster,\n\
+             speech.doubao.api_key, speech.doubao.app_id, speech.doubao.access_token,\n\
              speech.doubao.asr_resource_id, speech.doubao.tts_resource_id, speech.doubao.voice_type,\n\
              speech.doubao.tts_url, speech.doubao.asr_url, speech.doubao.tts_speed,\n\
              audio.silence_seconds, audio.min_speech_seconds"
@@ -554,35 +557,54 @@ fn edit_llm_profile(profile: &mut LlmProfile) -> Result<()> {
 fn wizard_speech(cfg: &mut AppConfig) -> Result<()> {
     print_step(3, 4, "语音供应商");
 
-    println!("   {BOLD}Doubao{RESET}  {MUTED}(字节跳动 BigASR + TTS){RESET}");
-    println!("   {MUTED}控制台: console.volcengine.com/speech{RESET}");
+    println!("   {BOLD}Doubao{RESET}  {MUTED}(豆包语音识别 2.0 + 语音合成 2.0){RESET}");
+    println!("   {MUTED}控制台: console.volcengine.com/speech  需开通「流式语音识别 2.0」「语音合成 2.0」{RESET}");
     println!();
+    prompt_doubao_credentials(cfg)
+}
 
-    if is_real_value(&cfg.speech.doubao.app_id) {
-        if let Some(v) = prompt_optional("   App ID", &cfg.speech.doubao.app_id)? {
-            cfg.speech.doubao.app_id = v;
+/// 新版控制台一把 API Key 通吃；旧版控制台是 App ID + Access Token。两套都支持。
+fn prompt_doubao_credentials(cfg: &mut AppConfig) -> Result<()> {
+    let d = &mut cfg.speech.doubao;
+
+    let masked = mask_key(&d.api_key);
+    let api_key = if is_real_value(&d.api_key) {
+        match prompt_optional("   API Key (新版控制台)", &masked)? {
+            Some(v) if v != masked => v,
+            _ => d.api_key.clone(),
         }
     } else {
-        cfg.speech.doubao.app_id = prompt_required("   App ID")?;
+        prompt_optional("   API Key (新版控制台，留空则用 App ID + Token)", "")?.unwrap_or_default()
+    };
+    d.api_key = api_key.trim().to_string();
+    if is_real_value(&d.api_key) {
+        return Ok(());
     }
 
-    let masked = mask_key(&cfg.speech.doubao.access_token);
-    if is_real_value(&cfg.speech.doubao.access_token) {
+    if is_real_value(&d.app_id) {
+        if let Some(v) = prompt_optional("   App ID", &d.app_id)? {
+            d.app_id = v;
+        }
+    } else {
+        d.app_id = prompt_required("   App ID")?;
+    }
+
+    let masked = mask_key(&d.access_token);
+    if is_real_value(&d.access_token) {
         if let Some(v) = prompt_optional("   Access Token", &masked)? {
             if v != masked {
-                cfg.speech.doubao.access_token = v;
+                d.access_token = v;
             }
         }
     } else {
-        cfg.speech.doubao.access_token = prompt_required("   Access Token")?;
+        d.access_token = prompt_required("   Access Token")?;
     }
-
     Ok(())
 }
 
 async fn wizard_voice(cfg: &mut AppConfig) -> Result<()> {
     print_step(4, 4, "音色");
-    println!("   {MUTED}音色列表: https://www.volcengine.com/docs/6561/97465{RESET}");
+    println!("   {MUTED}音色列表: https://www.volcengine.com/docs/6561/1257544{RESET}");
 
     loop {
         // Filter voices by language — zh_only voices hidden in English mode
@@ -697,8 +719,6 @@ async fn wizard_voice(cfg: &mut AppConfig) -> Result<()> {
 /// Play a short TTS sample with the current voice config. Returns true on success.
 async fn preview_voice(cfg: &AppConfig) -> bool {
     use crate::audio::playback::spawn_player;
-    use crate::speech::doubao::DoubaoTts;
-    use crate::speech::Tts;
 
     let name = &cfg.persona.name;
     let sample_text = match cfg.persona.language.as_str() {
@@ -708,13 +728,10 @@ async fn preview_voice(cfg: &AppConfig) -> bool {
 
     println!("   {BR_CYAN}♪ 试听中...{RESET}");
 
-    let doubao_cfg = cfg.speech.doubao.clone();
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
-    let tts = DoubaoTts::new(client, doubao_cfg);
-    let result = tts.synthesize(&sample_text).await;
+    let result = match crate::speech::build_tts(cfg) {
+        Ok(tts) => tts.synthesize(&sample_text).await,
+        Err(e) => Err(e),
+    };
 
     match result {
         Ok(Some(mp3)) => {

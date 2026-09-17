@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::log::{self, LogEvent};
+use crate::storage::events::{self as log, LogEvent};
 use crate::ui::theme::*;
 
 /// `cb logs` — print recent event logs to stdout.

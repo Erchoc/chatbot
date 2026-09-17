@@ -14,7 +14,7 @@ use crate::ui::theme::*;
 pub async fn run_voice(debug: bool) -> Result<()> {
     let cfg = AppConfig::load()?;
     let cfg = ensure_config(cfg)?;
-    crate::update_check::spawn_background_check();
+    crate::platform::update::spawn_background_check();
     let mut pipeline = VoicePipeline::new(cfg, debug)?;
     pipeline.run_loop().await
 }
@@ -23,13 +23,13 @@ pub async fn run_voice(debug: bool) -> Result<()> {
 pub async fn run_text(message: &str, _debug: bool) -> Result<()> {
     let cfg = AppConfig::load()?;
     let cfg = ensure_config(cfg)?;
-    crate::update_check::spawn_background_check();
+    crate::platform::update::spawn_background_check();
 
     let llm_config = cfg
         .active_llm_config()
         .ok_or_else(|| anyhow::anyhow!("No active LLM profile. Run `cb config`"))?;
 
-    let system_prompt = crate::i18n::build_system_prompt(
+    let system_prompt = crate::ui::i18n::build_system_prompt(
         &cfg.persona.language,
         &cfg.persona.name,
         cfg.persona.wake_word.enabled,
@@ -68,8 +68,8 @@ pub async fn run_text(message: &str, _debug: bool) -> Result<()> {
         result.total_ms / 1000.0,
     );
 
-    if let Some(v) = crate::update_check::pending_notice() {
-        let hint = crate::update_check::upgrade_hint();
+    if let Some(v) = crate::platform::update::pending_notice() {
+        let hint = crate::platform::update::upgrade_hint();
         println!("   {BR_CYAN}⬆  发现新版本 v{v}，运行 {BOLD}{hint}{RESET}{BR_CYAN} 升级{RESET}");
     }
 

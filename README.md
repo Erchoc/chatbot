@@ -89,7 +89,7 @@ The setup wizard walks you through:
 2. **Assistant name** — your assistant's identity
 3. **Wake word** — customizable trigger phrase (default: "嘿小派")
 4. **LLM provider** — DeepSeek, OpenAI, Ollama, or any OpenAI-compatible API
-5. **Speech provider** — Doubao (ByteDance) for ASR + TTS
+5. **Speech provider** — Doubao 2.0 (ByteDance) for ASR + TTS, via API Key or App ID + Token
 6. **Voice** — choose from preset voices with live preview
 
 Config lives at `~/.config/chatbot/config.toml`. Edit directly or use:
@@ -170,8 +170,8 @@ Microphone → VAD → ASR (Doubao) → Wake Word Check → LLM (streaming)
 | Category | Providers |
 |----------|-----------|
 | LLM | DeepSeek, OpenAI, Claude, Ollama, any OpenAI-compatible API |
-| ASR | Doubao BigASR (ByteDance) |
-| TTS | Doubao TTS (ByteDance) |
+| ASR | 豆包流式语音识别模型 2.0 — Doubao Seed-ASR (ByteDance) |
+| TTS | 豆包语音合成模型 2.0 — Doubao Seed-TTS (ByteDance) |
 
 ---
 

@@ -1,3 +1,5 @@
+//! ASCII 表情/电平条是一套素材，部分帧当前未接线，保留供后续 UI 使用。
+#![allow(dead_code)]
 use super::theme::*;
 
 /// Robot face frames for different states
