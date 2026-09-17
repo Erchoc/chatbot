@@ -270,3 +270,25 @@ jobs:
       dry_run:     false
     secrets:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # ── 通知 homebrew-tap 立刻 bump（仅正式版；beta 不进 brew）──────────────
+  #    需要仓库 secret TAP_DISPATCH_TOKEN：对 Erchoc/homebrew-tap 有 contents:write
+  #    的 fine-grained PAT。没配也没关系，tap 的定时任务每 6 小时会自动跟上。
+  notify-tap:
+    name: Notify homebrew-tap
+    needs: release
+    if: ${{ needs.release.outputs.should_publish == 'true' && !contains(needs.release.outputs.tag, '-') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: repository_dispatch → Erchoc/homebrew-tap
+        env:
+          GH_TOKEN: ${{ secrets.TAP_DISPATCH_TOKEN }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::TAP_DISPATCH_TOKEN 未配置，跳过即时通知；homebrew-tap 的定时任务会在 6 小时内自动 bump。"
+            exit 0
+          fi
+          printf '{"event_type":"release-published","client_payload":{"tool":"cb","tag":"%s"}}' "$TAG" \
+            | gh api repos/Erchoc/homebrew-tap/dispatches --input -
+          echo "✓ dispatched release-published(cb, $TAG) to Erchoc/homebrew-tap"

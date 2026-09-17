@@ -212,7 +212,7 @@ git push origin main v0.1.0-beta.5
 2. Creates a GitHub Release with those artifacts (pre-release is auto-flagged for any tag containing `-`)
 3. Chains `publish-npm` — publishes `@erchoc/chatbot@<version>` to npm
 
-**What's NOT automatic**: the Homebrew Formula at [`Erchoc/homebrew-tap/Formula/cb.rb`](https://github.com/Erchoc/homebrew-tap/blob/master/Formula/cb.rb) must be updated manually after each release (bump `version` + 3 sha256 values from the new artifacts).
+4. Notifies [`Erchoc/homebrew-tap`](https://github.com/Erchoc/homebrew-tap) (stable tags only) so its `bump formulae` workflow updates `Formula/cb.rb` right away — and even without the `TAP_DISPATCH_TOKEN` secret, that workflow polls `/releases/latest` every 6 hours. Betas never reach brew.
 
 **Plain commits to `main`** trigger CI only. They do *not* trigger releases, and they do *not* deploy the web site — run `bun run deploy:web` to publish the landing page (including the `install.sh` endpoint) to Cloudflare at `chatbot.longye.dev`.
 

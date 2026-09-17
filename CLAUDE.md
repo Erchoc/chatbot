@@ -269,12 +269,12 @@ When wake word session is active, `threshold_scale = 0.8` (20% more sensitive).
 |------|------|------|-----------|
 | 1. curl | 立即 | `git push` 到 main + `bun run deploy:web` 把 install.sh 部署到 Cloudflare + tag 一个 prerelease（或让 curl 走 `CB_CHANNEL=any`） | 追新用户：`curl ... \| bash` 抓最新 release |
 | 2. 正式版 | 次日无反馈 | tag 稳定版（如 `v0.1.1`），推触发 release.yml → npm 同步发布 | `CB_CHANNEL=stable` 的 curl 用户 + `npm install -g @erchoc/chatbot` |
-| 3. brew | 正式版发布一周后无反馈 | 在 `Erchoc/homebrew-tap` 手动运行 `bump formulae` workflow（tool=cb） | `brew install erchoc/tap/cb` 的求稳用户 |
+| 3. brew | 正式版发布后自动 | tap 仓库的 `bump-formulae.yml` 定时（每 6h）或收到 `repository_dispatch` 后自动把 formula 对齐到 `/releases/latest`，装测通过才提交 | `brew install erchoc/tap/cb` 用户跑 `brew upgrade erchoc/tap/cb` |
 
 **规则**：
 - 任何阶段收到用户负反馈 → 回滚到上一阶段，修复后重新从阶段 1 开始。
-- 阶段 2、3 之间不要跳步。brew 是最慢的那一档，默认一周 soak。
-- 修 bug（即使是紧急）也走一样的流程 —— curl 先上，次日升正式版，一周升 brew。
+- brew 只跟正式版（beta 永远不进 brew）。想让 brew 也 soak 就晚点打正式 tag；配了 `TAP_DISPATCH_TOKEN` 时正式版发布几分钟后 brew 就能升。
+- 修 bug（即使是紧急）也走一样的流程 —— curl 先上（beta tag），确认没问题再打正式 tag，brew 自动跟。
 - `CB_CHANNEL` 默认值 `any`（含 prerelease），所以 curl 用户会自动拿到阶段 1 的版本。
 
 ## Rules
