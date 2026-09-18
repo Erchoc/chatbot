@@ -255,23 +255,8 @@ jobs:
             artifacts/cb-linux-arm64/cb-linux-arm64
             artifacts/cb-linux-arm64/cb-linux-arm64.sha256
 
-  # ── npm publish (chained from release job — GITHUB_TOKEN-created releases
-  #    don't trigger `on: release:` workflows, so we call the reusable
-  #    workflow directly here). ────────────────────────────────────────────
-  publish-npm:
-    name: Publish to npm
-    needs: release
-    if: ${{ needs.release.outputs.should_publish == 'true' }}
-    uses: Erchoc/homebrew-tap/.github/workflows/publish-npm-reusable.yml@main
-    with:
-      tool:        cb
-      release_tag: ${{ needs.release.outputs.tag }}
-      package_dir: packages/npm
-      dry_run:     false
-    secrets:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-  # ── 通知 homebrew-tap 立刻 bump（仅正式版；beta 不进 brew）──────────────
+  # ── 通知 homebrew-tap（仅正式版）：它会立刻 bump brew formula 并同步 npm 包 ─────
+  #    brew / npm 两个渠道都由 homebrew-tap 这个 hub 自动跟正式版，本仓库不持有 npm 凭证。
   #    需要仓库 secret TAP_DISPATCH_TOKEN：对 Erchoc/homebrew-tap 有 contents:write
   #    的 fine-grained PAT。没配也没关系，tap 的定时任务（北京时间每天 08:10 / 20:10）会自动跟上。
   notify-tap:
@@ -286,7 +271,7 @@ jobs:
           TAG: ${{ needs.release.outputs.tag }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo "::notice::TAP_DISPATCH_TOKEN 未配置，跳过即时通知；homebrew-tap 的定时任务会在下一个检查点（北京时间 08:10 / 20:10）自动 bump。"
+            echo "::notice::TAP_DISPATCH_TOKEN 未配置，跳过即时通知；homebrew-tap 的定时任务会在下一个检查点（北京时间 08:10 / 20:10）自动同步 brew 与 npm。"
             exit 0
           fi
           printf '{"event_type":"release-published","client_payload":{"tool":"cb","tag":"%s"}}' "$TAG" \

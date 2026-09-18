@@ -268,13 +268,14 @@ When wake word session is active, `threshold_scale = 0.8` (20% more sensitive).
 | 阶段 | 时机 | 动作 | 触达的用户 |
 |------|------|------|-----------|
 | 1. curl | 立即 | `git push` 到 main + `bun run deploy:web` 把 install.sh 部署到 Cloudflare + tag 一个 prerelease（或让 curl 走 `CB_CHANNEL=any`） | 追新用户：`curl ... \| bash` 抓最新 release |
-| 2. 正式版 | 次日无反馈 | tag 稳定版（如 `v0.1.1`），推触发 release.yml → npm 同步发布 | `CB_CHANNEL=stable` 的 curl 用户 + `npm install -g @erchoc/chatbot` |
-| 3. brew | 正式版发布后自动 | tap 仓库的 `bump-formulae.yml` 定时（北京时间每天 08:10 / 20:10）或收到 `repository_dispatch` 后自动把 formula 对齐到 `/releases/latest`，装测通过才提交 | `brew install erchoc/tap/cb` 用户跑 `brew upgrade erchoc/tap/cb` |
+| 2. 正式版 | 次日无反馈 | tag 稳定版（如 `v0.1.1`），推触发 release.yml 出二进制 | `CB_CHANNEL=stable` 的 curl 用户 |
+| 3. brew + npm | 正式版发布后自动 | `Erchoc/homebrew-tap` 这个 hub 的 `bump-formulae.yml` / `sync-npm.yml` 定时（北京时间每天 08:10 / 20:10）或收到 `repository_dispatch` 后自动对齐到 `/releases/latest`；brew 装测通过才提交，npm 已发布的版本跳过。本仓库不持有 npm 凭证 | `brew upgrade erchoc/tap/cb` / `npm install -g @erchoc/chatbot@latest` |
 
 **规则**：
 - 任何阶段收到用户负反馈 → 回滚到上一阶段，修复后重新从阶段 1 开始。
-- brew 只跟正式版（beta 永远不进 brew）。想让 brew 也 soak 就晚点打正式 tag；配了 `TAP_DISPATCH_TOKEN` 时正式版发布几分钟后 brew 就能升。
-- 修 bug（即使是紧急）也走一样的流程 —— curl 先上（beta tag），确认没问题再打正式 tag，brew 自动跟。
+- brew / npm 只跟正式版（beta 只走 curl）。想 soak 就晚点打正式 tag；配了 `TAP_DISPATCH_TOKEN` 时正式版发布几分钟后两个渠道就能升。
+- npm 凭证只存在 `Erchoc/homebrew-tap` 仓库（`NPM_TOKEN`），本仓库不需要也不要再加。
+- 修 bug（即使是紧急）也走一样的流程 —— curl 先上（beta tag），确认没问题再打正式 tag，brew / npm 自动跟。
 - `CB_CHANNEL` 默认值 `any`（含 prerelease），所以 curl 用户会自动拿到阶段 1 的版本。
 
 ## Rules
