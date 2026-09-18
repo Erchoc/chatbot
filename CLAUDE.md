@@ -269,7 +269,7 @@ When wake word session is active, `threshold_scale = 0.8` (20% more sensitive).
 |------|------|------|-----------|
 | 1. curl | 立即 | `git push` 到 main + `bun run deploy:web` 把 install.sh 部署到 Cloudflare + tag 一个 prerelease（或让 curl 走 `CB_CHANNEL=any`） | 追新用户：`curl ... \| bash` 抓最新 release |
 | 2. 正式版 | 次日无反馈 | tag 稳定版（如 `v0.1.1`），推触发 release.yml → npm 同步发布 | `CB_CHANNEL=stable` 的 curl 用户 + `npm install -g @erchoc/chatbot` |
-| 3. brew | 正式版发布后自动 | tap 仓库的 `bump-formulae.yml` 定时（每 6h）或收到 `repository_dispatch` 后自动把 formula 对齐到 `/releases/latest`，装测通过才提交 | `brew install erchoc/tap/cb` 用户跑 `brew upgrade erchoc/tap/cb` |
+| 3. brew | 正式版发布后自动 | tap 仓库的 `bump-formulae.yml` 定时（北京时间每天 08:10 / 20:10）或收到 `repository_dispatch` 后自动把 formula 对齐到 `/releases/latest`，装测通过才提交 | `brew install erchoc/tap/cb` 用户跑 `brew upgrade erchoc/tap/cb` |
 
 **规则**：
 - 任何阶段收到用户负反馈 → 回滚到上一阶段，修复后重新从阶段 1 开始。

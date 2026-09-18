@@ -273,7 +273,7 @@ jobs:
 
   # ── 通知 homebrew-tap 立刻 bump（仅正式版；beta 不进 brew）──────────────
   #    需要仓库 secret TAP_DISPATCH_TOKEN：对 Erchoc/homebrew-tap 有 contents:write
-  #    的 fine-grained PAT。没配也没关系，tap 的定时任务每 6 小时会自动跟上。
+  #    的 fine-grained PAT。没配也没关系，tap 的定时任务（北京时间每天 08:10 / 20:10）会自动跟上。
   notify-tap:
     name: Notify homebrew-tap
     needs: release
@@ -286,7 +286,7 @@ jobs:
           TAG: ${{ needs.release.outputs.tag }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo "::notice::TAP_DISPATCH_TOKEN 未配置，跳过即时通知；homebrew-tap 的定时任务会在 6 小时内自动 bump。"
+            echo "::notice::TAP_DISPATCH_TOKEN 未配置，跳过即时通知；homebrew-tap 的定时任务会在下一个检查点（北京时间 08:10 / 20:10）自动 bump。"
             exit 0
           fi
           printf '{"event_type":"release-published","client_payload":{"tool":"cb","tag":"%s"}}' "$TAG" \
