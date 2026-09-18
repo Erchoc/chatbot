@@ -210,7 +210,7 @@ git push origin main v0.1.0-beta.5
 
 1. Builds macOS Universal (arm64 + x86_64), Linux x86_64, Linux aarch64
 2. Creates a GitHub Release with those artifacts (pre-release is auto-flagged for any tag containing `-`)
-3. Chains `publish-npm` — publishes `@erchoc/chatbot@<version>` to npm
+3. Notifies [`Erchoc/homebrew-tap`](https://github.com/Erchoc/homebrew-tap) (stable tags only). That hub updates `Formula/cb.rb` and publishes `@erchoc/chatbot` to npm right away — and even without the `TAP_DISPATCH_TOKEN` secret, it polls `/releases/latest` twice a day (08:10 / 20:10 Beijing time). Betas never reach brew or npm.
 
 4. Notifies [`Erchoc/homebrew-tap`](https://github.com/Erchoc/homebrew-tap) (stable tags only) so its `bump formulae` workflow updates `Formula/cb.rb` right away — and even without the `TAP_DISPATCH_TOKEN` secret, that workflow polls `/releases/latest` twice a day (08:10 / 20:10 Beijing time). Betas never reach brew.
 
